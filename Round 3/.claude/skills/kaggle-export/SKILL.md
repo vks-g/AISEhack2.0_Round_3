@@ -36,6 +36,29 @@ these was a real bug caught by executing the notebook:
   `.cache/` locally. Leaving even the dead `np.load`/`np.savez` bodies in means a
   host grepping for artifact I/O gets hits on code that never runs.
 
+## Two platform traps that only appear in the notebook
+
+**Import LightGBM before PyTorch.** They bundle separate OpenMP runtimes. On
+macOS, initialising torch's first makes LightGBM segfault later inside
+`lightgbm/basic.py __init_from_np2d` — a bare SIGSEGV, no Python traceback,
+normal memory use. Measured: no-torch survives, lightgbm→torch survives,
+torch→lightgbm crashes. Linux (so Kaggle) resolves both to one libgomp and is
+unaffected, but the seed cell imports the boosters first so the notebook runs
+anywhere. Do not reorder it.
+
+When something dies with no traceback, run it under `-X faulthandler` — that is
+what produces the crash site. And read the *signal*: a wrapper that reports the
+child's negative return code distinguishes SIGKILL (memory) from SIGSEGV (a
+library fault) in one run. Free-page counts on macOS are not available memory and
+will send you the wrong way.
+
+**Data discovery must search, but must not adopt.** `DATA_DIR` walks
+`/kaggle/input` to depth 3 and accepts a directory only if it holds **both**
+`train.csv` and `test.csv`. The pairing is what prevents picking up an unrelated
+attached dataset (§6.2.1) — not the absence of a walk. A one-level scan failed to
+find the competition's own data. Every match is printed and the selection named,
+and failure raises with the actual tree so one run diagnoses it.
+
 ## Rules the export must not break
 
 - **Nothing read that this run did not write.** No checkpoint import, no feature

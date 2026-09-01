@@ -239,6 +239,21 @@ The OOF 0.903 → LB 0.883 gap is most likely OOF-tuned blend weights and stacki
 on 220-row properties. Tune blend weights on an **inner** split of the training
 fold, never on the outer OOF.
 
+## Platform traps (both cost hours to rediscover)
+
+- **LightGBM must be imported before PyTorch.** Separate bundled OpenMP runtimes;
+  torch-first makes LightGBM segfault on macOS inside `__init_from_np2d`, with no
+  traceback and normal memory use. Linux/Kaggle is unaffected. The seed cell in
+  the exported notebook does this deliberately.
+- **Diagnose a silent death by signal, not by memory graphs.** A wrapper that
+  reports the child's negative return code separates SIGKILL from SIGSEGV
+  immediately, and `-X faulthandler` gives the crash site. macOS `vm_stat` free
+  pages are not available memory — they will point at OOM when the machine is at
+  38% free.
+- **`pgrep -f <pattern>` matches the watching process's own command line.** Two
+  background jobs in this repo silently misbehaved that way (a wait loop that
+  could never exit, and a memory watchdog reporting its own RSS). Match by PID.
+
 ## Compute discipline
 
 Kaggle has a hard runtime limit and an over-budget notebook produces **no

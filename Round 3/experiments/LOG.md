@@ -16,6 +16,10 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | ridge_baseline | 42 | 0.5354 | 0.8187 | 0.2366 | -0.0542 | 0.6055 | 0.7623 | 0.5994 | 0.7796 | 0.0287 | 4s | host baseline equivalent; smoke test only |
 | 2026-09-01 | lgbm | 42 | **0.8519** | 0.9095 | 0.9032 | 0.8956 | 0.7248 | 0.8373 | 0.8057 | 0.8875 | 0.0089 | 377s | per-property LightGBM, 2978 features, size-adaptive. **Local reference.** |
 | 2026-09-01 | lgbm_physics | 42 | **0.8807** | 0.9091 | 0.9064 | 0.9179 | 0.8109 | 0.8686 | 0.8408 | 0.9114 | 0.0072 | 1178s | + partner features + AFFINE physics blend. **+0.0288 over `lgbm`, 4x the noise floor.** New best. |
+| 2026-09-01 | lgbm (partners+physics-feat) | 42 | 0.8645 | 0.906 | 0.904 | 0.900 | 0.781 | 0.853 | 0.811 | 0.883 | — | 343s | base model only, before the physics blend |
+| 2026-09-01 | xgb  (partners+physics-feat) | 42 | 0.8629 | | | | | | | | — | 232s | base model only |
+| 2026-09-01 | cb   (partners+physics-feat) | 42 | 0.8677 | | | | | | | | — | 486s | **best single base model** |
+| 2026-09-01 | lgbm+xgb+cb → stack → staged physics | 42 | **0.8974** | 0.9064 | 0.9073 | 0.9327 | 0.8446 | 0.8827 | 0.8788 | 0.9295 | — | 1065s | per-property folds, partner feats, staged+masked physics. **New best.** |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -69,6 +73,29 @@ Record what did NOT work here so no session retries it.
 - **Translation/oligomer canonicalisation buys nothing on this data.** A
   macrocycle key merges only 7 groups out of ~9,000, none differing in heavy-atom
   count. Keep it as an audit tool, not a merge key — it produces false merges.
+- **Iterated physics refinement leaks catastrophically unless masked per fold.**
+  Refining the predicted property table by belief propagation over the relation
+  graph looked worth **+0.042 mean R² (0.893 → 0.935)**. It was entirely fake:
+  `eps` is refined *from* `nc`, and `nc` is then predicted *from* the refined
+  `eps`, so a validation polymer's own measured label flowed back into its own
+  prediction through a two-hop loop. With the mask in place (each (target, fold)
+  redoes the refinement with that fold's true target values replaced by their
+  out-of-fold predictions) the real gain is **+0.001**. Keep the mask; the
+  iteration itself is close to worthless here. This is the same class of error
+  that most plausibly explains the 0.903 OOF → 0.883 LB gap on the team's
+  earlier notebook.
+- **A Ridge stack over a single base model makes things slightly worse**
+  (0.8645 → 0.8622 on lgbm alone). The meta-learner needs ≥2 decorrelated inputs
+  before it earns its variance.
+- **Cheap diverse models (kNN on Morgan bits, ExtraTrees, Ridge) do not help the
+  stack.** Standalone with partner features: knn 0.7412 (29s), ridge 0.5939 (4s).
+  Adding them to lgbm+xgb+cb+mtnn moved the final score 0.9040 → 0.9034 (knn) and
+  → 0.9037 (knn+ridge). Diversity only pays when the added model is *also* strong;
+  a 0.74 model forces the meta-learner to spend capacity down-weighting it.
+  `src/models/simple.py` is kept for reference but is not in the pipeline.
+- **A fourth booster is nearly worthless.** xgb on top of lgbm+cb was +0.0001.
+  The three GBDTs correlate at ~0.99; the multi-task NN is what actually moved
+  the stack (0.8713 → 0.8950), because it is wrong in different places.
 - **`submissions/round-3-aisehack.ipynb` (v2) is not a safe default.** Unscored,
   drops ingest canonicalisation, fits one physics weight across two populations,
   and very likely exceeds the Kaggle session limit. Score it before trusting it.

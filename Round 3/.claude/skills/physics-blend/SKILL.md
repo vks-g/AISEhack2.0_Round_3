@@ -70,3 +70,51 @@ team's 0.903 OOF came back as 0.883 on the public LB.
 `eps` (0.725 in the plain `lgbm` config) and `ei` (0.806) are the two weakest
 targets, and physics reaches both — `eps` at 62% coverage with a fitted R² of
 0.855, `ei` at 37% with 0.965. Those are the highest-value rows in the dataset.
+
+## Staging: count the measured sources, do not just ask "all or nothing"
+
+A binary true/predicted split throws away the partially covered rows, and they
+are the largest group. For the 148 `ei` test rows: **55 have both `egc` and
+`eea` measured, 69 have exactly one, and only 24 have neither.** Lumping those
+69 in with the fully-predicted rows discards a real measurement and calibrates
+one weight across two populations with very different reliability.
+
+`src/oof.py apply_physics()` groups rows by the number of measured sources and
+gives each group its own calibration and its own blend weight. Measured on
+lgbm alone, that staging is worth **+0.063 on ei, +0.059 on eps, +0.043 on eea,
++0.031 on egb, +0.028 on nc** — mean 0.8645 → 0.8941.
+
+The fitted weights are informative in themselves:
+
+    ei   {2 sources: 0.81, 1: 0.75, 0: 1.00}
+    eps  {1: 0.54, 0: 1.00}
+
+A weight of 1.00 at level 0 means that for rows with no measured partner, the
+relation applied to *predicted* partners beats the direct model outright. That is
+not a bug: `eps` (229 rows, R² 0.78 direct) is better predicted by routing
+through `nc` than by modelling it head-on.
+
+## The trap: iterating the relations leaks, spectacularly
+
+Because level-0 weights are so high, the obvious next step is to refine the
+predicted property table by belief propagation over the relation graph before
+using it. Measured naively that is worth **+0.042 mean R² (0.893 → 0.935)**.
+
+**It is entirely fake.** `eps` is refined *from* `nc`, and `nc` is then predicted
+*from* the refined `eps`, so a validation polymer's own measured label returns to
+its own prediction through a two-hop loop. With the mask in place — each
+(target, fold) redoes the refinement with that fold's true target values replaced
+by their out-of-fold predictions — the real gain is **+0.001**.
+
+If an idea in this family suddenly buys several points, assume a cycle in the
+constraint graph before believing it. This is the same class of error that most
+plausibly explains the team's 0.903 OOF → 0.883 public LB gap.
+
+## Combining base models: measure, do not assume
+
+With three correlated gradient-boosting models, a plain **mean beats a
+cross-fitted Ridge meta-learner** (0.8961 vs 0.8950 after physics), and Ridge
+over a *single* base model is worse than that model alone (0.8622 vs 0.8645).
+`src/oof.py stack()` therefore defaults to the mean and only tries Ridge when
+there are four or more base models, keeping it per target only where it actually
+wins out-of-fold.

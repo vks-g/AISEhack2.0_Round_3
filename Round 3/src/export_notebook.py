@@ -160,8 +160,13 @@ print("numpy", np.__version__, "pandas", pd.__version__)
 '''
 
 DATA_DIR_CELL = '''
-# Explicit candidate list. Deliberately NOT a recursive glob over /kaggle/input:
-# a glob can silently adopt an attached dataset, which is rule 6.2.1.
+# Locate the competition data.
+#
+# The search is bounded (depth <= 3) and a directory only qualifies if it holds
+# BOTH train.csv and test.csv. That pairing is what keeps an unrelated attached
+# dataset from being adopted, which is the property rule 6.2.1 actually cares
+# about -- not the absence of a directory walk. Every match is printed and the
+# chosen one is named, so the decision is visible in the output the hosts read.
 _CANDIDATES = [
     "/kaggle/input/aisehack-2-0",
     "/kaggle/input/aisehack-2-0-polymer-property-prediction-round-3",
@@ -169,32 +174,66 @@ _CANDIDATES = [
     "data",
     ".",
 ]
+_MAX_DEPTH = 3
+
+
+def _has_both(d):
+    return (os.path.isfile(os.path.join(d, "train.csv"))
+            and os.path.isfile(os.path.join(d, "test.csv")))
+
+
+def _search(root, max_depth=_MAX_DEPTH):
+    """Every directory at depth <= max_depth under root holding both CSVs."""
+    hits, seen = [], []
+    if not os.path.isdir(root):
+        return hits, seen
+    root_depth = root.rstrip("/").count("/")
+    for cur, dirs, files in os.walk(root):
+        if cur.rstrip("/").count("/") - root_depth >= max_depth:
+            dirs[:] = []
+        seen.append(cur)
+        if "train.csv" in files and "test.csv" in files:
+            hits.append(cur)
+    return hits, seen
+
 
 DATA_DIR = None
 for _c in _CANDIDATES:
-    if os.path.isfile(os.path.join(_c, "train.csv")) and os.path.isfile(os.path.join(_c, "test.csv")):
+    if _has_both(_c):
         DATA_DIR = _c
+        print(f"data found at an expected path: {_c}")
         break
+
 if DATA_DIR is None:
-    # One shallow scan of the immediate children of /kaggle/input -- still not
-    # recursive, and it only ever matches the competition's own directory.
-    _root = "/kaggle/input"
-    if os.path.isdir(_root):
-        for _d in sorted(os.listdir(_root)):
-            _p = os.path.join(_root, _d)
-            if os.path.isfile(os.path.join(_p, "train.csv")):
-                DATA_DIR = _p
-                break
+    _hits, _seen = _search("/kaggle/input")
+    if _hits:
+        _hits.sort(key=lambda d: (d.count("/"), d))
+        for _h in _hits:
+            print(f"  candidate: {_h}")
+        DATA_DIR = _hits[0]
+        print(f"selected: {DATA_DIR}" + ("  (shallowest of several)" if len(_hits) > 1 else ""))
+
 if DATA_DIR is None:
-    raise FileNotFoundError("could not locate train.csv/test.csv")
+    _, _seen = _search("/kaggle/input")
+    _top = sorted(os.listdir("/kaggle/input")) if os.path.isdir("/kaggle/input") else "(/kaggle/input does not exist)"
+    raise FileNotFoundError(
+        "could not locate a directory containing BOTH train.csv and test.csv.\\n"
+        f"  /kaggle/input top level : {_top}\\n"
+        f"  directories searched    : {_seen[:40]}\\n"
+        f"  cwd                     : {os.getcwd()}\\n"
+        "If the competition is attached but not listed above, the notebook session "
+        "may predate the attachment -- restart the session and re-run.")
 
 WORK_DIR = "/kaggle/working" if os.path.isdir("/kaggle/working") else "."
 print("DATA_DIR:", DATA_DIR)
-print("contents:", sorted(os.listdir(DATA_DIR))[:10])
+print("contents:", sorted(os.listdir(DATA_DIR)))
+print("WORK_DIR:", WORK_DIR)
+
 
 def cache_dir():
     raise RuntimeError("no disk cache in the notebook -- everything is recomputed")
 '''
+
 
 FEATURES_OVERRIDE = '''
 # The local development harness memoises features to disk so cross-validation

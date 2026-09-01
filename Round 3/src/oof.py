@@ -21,6 +21,7 @@ that saw exactly the same training rows.
 """
 from __future__ import annotations
 
+import gc
 import json
 import time
 from pathlib import Path
@@ -285,6 +286,11 @@ def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
         if len(te):
             test_pred[te] = full.predict(Xtest[te])
         universe[t] = full.predict(Xuni)
+        # Xuni is ~107 MB for 8990 polymers x 2978 features and is rebuilt for
+        # every (model, target). Dropping it explicitly keeps peak RSS flat
+        # instead of leaving 21 of them to the garbage collector's timing.
+        del Xfull, Xtest, Xuni
+        gc.collect()
 
     return oof, test_pred, universe
 

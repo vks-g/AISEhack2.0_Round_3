@@ -1,0 +1,18 @@
+# local python env and feature cache -- never commit, never upload to Kaggle
+Round 3/.venv/
+Round 3/.cache/
+Round 3/.claude/.last-logged-run
+__pycache__/
+*.pyc
+
+# competition data is redistributable only under the competition rules
+Round 3/data/
+archive/
+
+# scored-run artifacts: keep the JSON summaries, drop the OOF arrays
+Round 3/experiments/runs/*_oof.npy
+
+.DS_Store
+
+# Round 2 screenshots -- already mirrored as markdown in Round 3/context/
+Round 2 /Info.zip

@@ -1,0 +1,17 @@
+# LOCAL development environment only. Kaggle preinstalls everything here except
+# rdkit, so the exported notebook installs only `rdkit` and must not read this
+# file -- shipping a pinned environment would be an uploaded artifact (rules 6.2.4).
+#
+#   uv venv --python 3.12 .venv
+#   uv pip install --python .venv/bin/python -r requirements-dev.txt
+numpy
+pandas
+scipy
+scikit-learn
+rdkit
+lightgbm
+xgboost
+catboost
+torch
+matplotlib
+joblib

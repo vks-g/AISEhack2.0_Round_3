@@ -166,9 +166,16 @@ def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
         training fold and passing the single fitted value turns something the
         tree cannot represent into something it can split on.
 
-        MEASURED on lgbm alone: eps 0.784 -> 0.853, nc 0.849 -> 0.914,
-        ei 0.806 -> 0.870. This is the largest single feature-level gain in the
-        pipeline, and it lands entirely on the three weakest targets.
+        MEASURED end to end: 0.9070 -> 0.9097 (+0.0027), concentrated on the
+        small DFT targets.
+
+        The block handed in here is the MEAN-filled one from partners_build(),
+        rebuilt per fold with the validation rows removed. Do not substitute the
+        prediction-filled frame from partner_frame(): 52% of its partner cells
+        for eps/nc/ei are base-model outputs, and every one of those models
+        receives true_<target> as a feature, so the row's own label returns
+        through a single hop. Measured that way this feature looks worth +0.069
+        on eps instead of +0.003 -- the gain is the leak.
         """
         from sklearn.model_selection import KFold as _KF
 

@@ -267,14 +267,26 @@ def build(models, out_path):
                     "which contributes up to six rows, inside a single fold."))
     cells.append(code("from sklearn.model_selection import GroupKFold, KFold\n\n" + strip("splits.py")))
 
-    cells.append(md("## 7. Physics relations between the DFT properties\n\n"
+    cells.append(md("## 7. Co-observed partner features, with the leakage guard\n\n"
+                    "The measured values of a polymer's OTHER properties. 88-99% of "
+                    "DFT-block test rows have their polymer present in train under some "
+                    "property, which makes this the strongest feature family for that "
+                    "block -- and the easiest place in the pipeline to leak, so the guard "
+                    "is proved in both directions below."))
+    cells.append(code(strip("partners.py", {
+        "build": "partners_build",
+        "drop_leaky": "partners_drop_leaky",
+        "assert_no_leak": "partners_assert_no_leak"})))
+    cells.append(code("partners_assert_no_leak(train_df)"))
+
+    cells.append(md("## 8. Physics relations between the DFT properties\n\n"
                     "Measured on co-observed training pairs: the raw identity `eps = nc**2` "
                     "scores R² 0.336, while the same expression affine-calibrated scores 0.855. "
                     "`nc` goes 0.171 → 0.837 and `egb` 0.892 → 0.928. Every relation here is "
                     "fitted, never applied raw."))
     cells.append(code("from dataclasses import dataclass, field\n\n" + strip("physics.py", {"report": "report_relations"})))
 
-    cells.append(md("## 8. Base models"))
+    cells.append(md("## 9. Base models"))
     # trees.py imports params_for from src/configs/lgbm.py. Inline just that
     # function under the alias trees.py expects, or the flattened notebook dies
     # with NameError the moment the first model is built.
@@ -295,7 +307,7 @@ def build(models, out_path):
                         "from the descriptor models — which is what it contributes to the stack."))
         cells.append(code(strip("models/cnn.py", {"oof_and_test": "cnn_oof_and_test", "NAME": "_NAME_CNN"})))
 
-    cells.append(md("## 9. Out-of-fold engine, cross-fitted stack, two-stage physics\n\n"
+    cells.append(md("## 10. Out-of-fold engine, cross-fitted stack, two-stage physics\n\n"
                     "The stacker, the physics blend weight and the physics calibration are all "
                     "cross-fitted over the fold assignment. Fitting them on the same out-of-fold "
                     "predictions they are then scored against is what produces an OOF number that "
@@ -303,13 +315,21 @@ def build(models, out_path):
     # Drop the local disk-cache helpers entirely rather than neutering them:
     # leaving dead np.load/np.savez calls in the notebook means a host grepping
     # for artifact I/O gets hits on code that never runs.
-    _oof = strip("oof.py")
+    _oof = strip("oof.py", {
+        "P.build": "partners_build",
+        "P.drop_leaky": "partners_drop_leaky",
+        "physics.RELATIONS": "RELATIONS",
+        "physics.Relation": "Relation",
+        "physics.blend": "blend",
+        "physics.tune_weight": "tune_weight",
+        "physics.wide_table": "wide_table",
+    })
     _a = _oof.index("# local cache")
     _b = _oof.index("def report(")
     _oof = _oof[:_oof.rindex("# --", 0, _a)] + _oof[_b:]
     cells.append(code("from sklearn.linear_model import Ridge\n\n" + _oof))
 
-    cells.append(md("## 10. Run the pipeline and write `submission.csv`"))
+    cells.append(md("## 11. Run the pipeline and write `submission.csv`"))
     # Emit dispatch branches only for the models actually included, so the
     # notebook never references a function that was not inlined.
     branches = []
@@ -323,16 +343,16 @@ def build(models, out_path):
                    .replace("__MODEL_BRANCHES__", "\n".join(branches) if branches else "    # (no neural models in this build)"))
     cells.append(code(run))
 
-    cells.append(md("## 11. Explainability — per-target TreeSHAP\n\n"
+    cells.append(md("## 12. Explainability — per-target TreeSHAP\n\n"
                     "Exact SHAP values from LightGBM's own `pred_contrib=True`: the same "
                     "algorithm the `shap` package implements, computed inside LightGBM, so the "
                     "notebook gains no dependency that could fail to install."))
     cells.append(code(EXPLAIN_CELL))
 
-    cells.append(md("## 12. Polymer-invariance certificate"))
+    cells.append(md("## 13. Polymer-invariance certificate"))
     cells.append(code(INVARIANCE_CELL))
 
-    cells.append(md("## 13. Compliance self-audit"))
+    cells.append(md("## 14. Compliance self-audit"))
     cells.append(code(AUDIT_CELL))
 
     nb = {

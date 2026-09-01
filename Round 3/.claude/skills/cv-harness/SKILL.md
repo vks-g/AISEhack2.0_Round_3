@@ -69,7 +69,34 @@ standard error of the mean score, computed from the per-fold spread. Rules:
 |---|---|---|---|---|---|---|---|---|---|
 | `ridge_baseline` | 0.5354 | 0.819 | 0.237 | -0.054 | 0.606 | 0.762 | 0.599 | 0.780 | 4s |
 | `lgbm` | 0.8519 | 0.910 | 0.903 | 0.896 | 0.725 | 0.837 | 0.806 | 0.888 | 377s |
-| `lgbm_physics` | **0.8807** | 0.909 | 0.906 | 0.918 | 0.811 | 0.869 | 0.841 | 0.911 | 1178s |
+| `lgbm_physics` | 0.8807 | 0.909 | 0.906 | 0.918 | 0.811 | 0.869 | 0.841 | 0.911 | 1178s |
+| **`run_ensemble` (shipped)** | **0.9070** | 0.909 | 0.911 | 0.941 | 0.855 | 0.912 | 0.889 | 0.932 | ~54 min |
+
+## Two entry points
+
+`src.cv --config <name>` scores a **single-model** config through the two-function
+API. It is the right tool for trying one idea in isolation.
+
+`src.run_ensemble` is the **shipped pipeline** and the one that produces a
+submission:
+
+```bash
+./.venv/bin/python -m src.run_ensemble --models lgbm,xgb,cb,mtnn
+./.venv/bin/python -m src.run_ensemble --models lgbm,xgb,cb,mtnn --out submission.csv
+```
+
+Base-model out-of-fold predictions are cached under `.cache/` keyed by model,
+folds, seed and feature flags, so **iterating on the stack, the physics blend or
+the partner regression takes ~4 seconds** instead of an hour. Delete the relevant
+`.cache/oof_*.npz` to force a refit. The cache is local only; the exported
+notebook recomputes everything (rule 6.2.4).
+
+Stages, and what each was measured to be worth:
+
+    base models (4)                       0.8719  best single (mtnn)
+    -> cross-fitted stack                 0.8950  +0.0231
+    -> staged physics blend               0.9047  +0.0097
+    -> generalized partner regression     0.9070  +0.0023
 
 ## Turning a scored config into a submission
 

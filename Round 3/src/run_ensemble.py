@@ -29,7 +29,7 @@ GLOBAL_MODELS = {"mtnn", "cnn"}
 
 def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
          use_cache=True, verbose=True, scheme='per_property', use_partners=True,
-         use_physics_feature=True):
+         use_physics_feature=True, use_partner_ridge=True):
     t0 = time.time()
     train, test = load_train(), load_test()
     all_canon = list(dict.fromkeys(list(train["canon"]) + list(test["canon"])))
@@ -41,12 +41,12 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
     print(f"features {X_tr.shape[1]}  ({time.time()-t0:.0f}s)")
 
     fold_id = O.build_fold_id(train, n_folds=n_folds, seed=seed, scheme=scheme)
-    print(f"folds: {n_folds} x {scheme}   partners: {use_partners}   physics-feature: {use_physics_feature}")
+    print(f"folds: {n_folds} x {scheme}   partners: {use_partners}   physics-feature: {use_physics_feature}   partner-ridge: {use_partner_ridge}")
 
     base_oof, base_test, tree_universe = {}, {}, {}
 
     for name in models:
-        key = f"{name}_f{n_folds}_s{seed}_{scheme}_p{int(use_partners)}_pf{int(use_physics_feature)}"
+        key = f"{name}_f{n_folds}_s{seed}_{scheme}_p{int(use_partners)}_pf{int(use_physics_feature)}_pr{int(use_partner_ridge)}"
         hit = O.cache_get(key) if use_cache else None
         if hit is not None:
             base_oof[name], base_test[name] = hit["oof"], hit["test"]
@@ -65,7 +65,8 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
                                             test, X_te, fold_id, all_canon,
                                             X_all, seed=seed,
                                             use_partners=use_partners,
-                                            use_physics_feature=use_physics_feature)
+                                            use_physics_feature=use_physics_feature,
+                                            use_partner_ridge=use_partner_ridge)
             uni_arr = np.column_stack([uni[t] for t in TARGETS])
             tree_universe[name] = uni_arr
             if use_cache:

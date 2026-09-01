@@ -278,7 +278,7 @@ print(train_df.target_type.value_counts().reindex(TARGETS).to_string())
 '''
 
 
-def build(models, out_path):
+def build(models, out_path, physics_stage=True):
     cells = [md(HEADER), code("!pip install rdkit -q"), code(SEEDS)]
 
     cells.append(md("## 1. Data location and seeds"))
@@ -389,7 +389,8 @@ def build(models, out_path):
     if "cnn" in models:
         branches.append('    elif name == "cnn":\n'
                         '        o, te = cnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)')
-    run = (RUN_CELL.replace("__MODELS__", repr(list(models)))
+    run = (RUN_CELL.replace("__PHYSICS__", "True" if physics_stage else "False")
+                   .replace("__MODELS__", repr(list(models)))
                    .replace("__MODEL_BRANCHES__", "\n".join(branches) if branches else "    # (no neural models in this build)"))
     cells.append(code(run))
 
@@ -461,30 +462,37 @@ score_stack, _ = report(train_df, stacked_oof, "stacked")
 # cycle inflated the local OOF by +0.008 while contributing nothing on test,
 # where no such labels exist. So the universe is rebuilt here from a
 # partner-free pass.
-print("building the leak-free partner universe ...", flush=True)
-_t_cu = time.time()
-_, _, _cu = per_property_oof(make, "lgbm", train_df, X_tr, test_df, X_te,
-                             fold_id, all_canon, X_all, seed=SEED,
-                             use_partners=False, use_physics_feature=False,
-                             use_partner_ridge=False)
-uni = np.column_stack([_cu[t] for t in TARGETS])
-print(f"  clean universe ({time.time()-_t_cu:.0f}s)")
-universe_by_target = {t: uni[:, i] for i, t in enumerate(TARGETS)}
-partners, is_true = partner_frame(train_df, all_canon, universe_by_target)
-# n_rounds=2 is what was measured locally. The refinement itself is worth only
-# ~+0.001 once the per-fold mask is in place -- the mask is the important part.
-# n_rounds=0: the relation-graph refinement measured slightly NEGATIVE on the
-# four-model stack once its per-fold mask was in place (0.9047 vs 0.9040). The
-# masking logic is kept in the code because it documents why the unmasked version
-# was fake, but it ships disabled.
-final_oof, final_test, phys_info = apply_physics(
-    train_df, stacked_oof, test_df, stacked_test, fold_id, partners, is_true,
-    n_rounds=0)
-report(train_df, final_oof, "stacked + staged physics")
+USE_PHYSICS = __PHYSICS__      # False ships the stack alone, no post-model stages
 
-final_oof, final_test, pr_info = partner_regression(
-    train_df, final_oof, test_df, final_test, fold_id, partners, is_true)
-FINAL_SCORE, FINAL_PER = report(train_df, final_oof, "+ generalized partner regression")
+if not USE_PHYSICS:
+    final_oof, final_test = stacked_oof, stacked_test
+    FINAL_SCORE, FINAL_PER = report(train_df, final_oof, "stacked (physics stages disabled)")
+    phys_info = {}
+else:
+  print("building the leak-free partner universe ...", flush=True)
+  _t_cu = time.time()
+  _, _, _cu = per_property_oof(make, "lgbm", train_df, X_tr, test_df, X_te,
+                               fold_id, all_canon, X_all, seed=SEED,
+                               use_partners=False, use_physics_feature=False,
+                               use_partner_ridge=False)
+  uni = np.column_stack([_cu[t] for t in TARGETS])
+  print(f"  clean universe ({time.time()-_t_cu:.0f}s)")
+  universe_by_target = {t: uni[:, i] for i, t in enumerate(TARGETS)}
+  partners, is_true = partner_frame(train_df, all_canon, universe_by_target)
+  # n_rounds=2 is what was measured locally. The refinement itself is worth only
+  # ~+0.001 once the per-fold mask is in place -- the mask is the important part.
+  # n_rounds=0: the relation-graph refinement measured slightly NEGATIVE on the
+  # four-model stack once its per-fold mask was in place (0.9047 vs 0.9040). The
+  # masking logic is kept in the code because it documents why the unmasked version
+  # was fake, but it ships disabled.
+  final_oof, final_test, phys_info = apply_physics(
+      train_df, stacked_oof, test_df, stacked_test, fold_id, partners, is_true,
+      n_rounds=0)
+  report(train_df, final_oof, "stacked + staged physics")
+
+  final_oof, final_test, pr_info = partner_regression(
+      train_df, final_oof, test_df, final_test, fold_id, partners, is_true)
+  FINAL_SCORE, FINAL_PER = report(train_df, final_oof, "+ generalized partner regression")
 
 # clip to the observed range: a negative bandgap is not a polymer, and one wild
 # extrapolation can wreck an R2 computed over only ~150 test rows
@@ -671,7 +679,9 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--models", default="lgbm,xgb,cb,mtnn,cnn")
     p.add_argument("--out", default="submissions/final.ipynb")
+    p.add_argument("--no-physics", action="store_true",
+                   help="ship the stack alone -- no physics blend, no partner regression")
     a = p.parse_args()
     models = [m.strip() for m in a.models.split(",") if m.strip()]
-    nb = build(models, a.out)
-    print(f"wrote {a.out}: {len(nb['cells'])} cells, models={models}")
+    nb = build(models, a.out, physics_stage=not a.no_physics)
+    print(f"wrote {a.out}: {len(nb['cells'])} cells, models={models}, physics={not a.no_physics}")

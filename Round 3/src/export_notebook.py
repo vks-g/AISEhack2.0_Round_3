@@ -139,6 +139,17 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 
+# IMPORT ORDER MATTERS. LightGBM and PyTorch each bundle their own OpenMP
+# runtime, and on macOS initialising torch's first makes LightGBM segfault when
+# it later builds a Dataset (lightgbm/basic.py __init_from_np2d). Measured:
+# torch-then-lightgbm crashes, lightgbm-then-torch is fine, and the crash is a
+# hard SIGSEGV with no Python traceback. Linux -- so Kaggle -- resolves both to
+# the same libgomp and is unaffected, but importing the boosters first costs
+# nothing and makes the notebook run anywhere.
+import lightgbm as lgb
+import xgboost as xgb
+import catboost as cb
+
 SEED = 42
 N_FOLDS = 10
 NN_SEEDS = [42, 202]
@@ -331,7 +342,7 @@ def build(models, out_path):
     # with NameError the moment the first model is built.
     _cfg = (SRC / "configs" / "lgbm.py").read_text()
     _pf = _cfg[_cfg.index("def params_for("):_cfg.index("def fit(")].rstrip()
-    cells.append(code("import lightgbm as lgb\nimport xgboost as xgb\nimport catboost as cb\n\n"
+    cells.append(code("# lgb / xgb / cb were imported in the seed cell, before torch, on purpose\n\n"
                       + _pf + "\n\n\n_lgbm_params_for = params_for\n\n\n"
                       + strip("models/trees.py", {"NAME": "_NAME_TREES"})))
     if "mtnn" in models:

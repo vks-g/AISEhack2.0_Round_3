@@ -450,35 +450,56 @@ print(submission.head().to_string(index=False))
 '''
 
 EXPLAIN_CELL = '''
+# Explained on the SAME design matrix the pipeline trains on -- base features
+# plus the co-observed partner block plus the fitted partner-Ridge column. An
+# explanation of a different, simpler model would not be an explanation of this
+# submission, and it would miss the most interesting result: on the DFT block the
+# partner properties dominate, which is the physics showing up directly in the
+# attribution rather than being asserted.
 FAMILY = {"rd": "RDKit descriptors", "mfp2": "Morgan r=2", "mfp3": "Morgan r=3",
           "ap": "atom pair", "tt": "topological torsion", "mac": "MACCS keys",
-          "po": "polymer-specific", "grp": "functional groups"}
-_cols = feature_names()
+          "po": "polymer-specific", "grp": "functional groups",
+          "true": "partner property (measured)", "has": "partner availability",
+          "n": "partner count", "ridge": "fitted partner combination"}
+_base_cols = feature_names()
 
 for t in TARGETS:
     rows = np.where((train_df["target_type"] == t).values)[0]
     if len(rows) < 20:
         continue
-    idx = rows if len(rows) <= 800 else np.random.RandomState(SEED).choice(rows, 800, replace=False)
-    mdl = make("lgbm", t, len(rows), SEED)
-    mdl.fit(X_tr[rows], train_df["target"].values[rows])
-    booster = mdl.model.booster_
-    contrib = booster.predict(X_tr[idx], pred_contrib=True)
-    vals = np.abs(contrib[:, :-1]).mean(axis=0)
-    s = pd.Series(vals, index=_cols).sort_values(ascending=False)
+    (blk,), _ = partners_build(train_df, [train_df.iloc[rows]])
+    kept = partners_drop_leaky(blk, t)
+    Xt = np.hstack([X_tr[rows], kept.values])
+    cols = _base_cols + list(kept.columns)
 
-    fam = s.groupby([c.split("_", 1)[0] for c in s.index]).sum()
+    y = train_df["target"].values[rows]
+    from sklearn.linear_model import RidgeCV as _RCV
+    _Z = np.nan_to_num(kept.values.astype(float))
+    if _Z.shape[1] and len(_Z) >= 30:
+        Xt = np.hstack([Xt, _RCV(alphas=[0.1, 1.0, 10.0, 100.0]).fit(_Z, y).predict(_Z).reshape(-1, 1)])
+        cols = cols + ["ridge_partner_fit"]
+
+    mdl = make("lgbm", t, len(rows), SEED)
+    mdl.fit(Xt, y)
+    idx = np.arange(len(rows)) if len(rows) <= 800 else \
+        np.random.RandomState(SEED).choice(len(rows), 800, replace=False)
+    contrib = mdl.model.booster_.predict(Xt[idx], pred_contrib=True)
+    ser = pd.Series(np.abs(contrib[:, :-1]).mean(axis=0), index=cols).sort_values(ascending=False)
+
+    fam = ser.groupby([c.split("_", 1)[0] for c in ser.index]).sum()
     fam = (fam / fam.sum() * 100).sort_values(ascending=False)
     print(f"\\n===== {t}  (n={len(rows)}) =====")
     print("  attribution by feature family:")
     for k, v in fam.items():
         if v >= 0.5:
-            print(f"    {FAMILY.get(k, k):<22} {v:5.1f}%")
-    interp = s[[c for c in s.index if c.startswith(("rd_", "po_", "grp_"))]]
+            print(f"    {FAMILY.get(k, k):<30} {v:5.1f}%")
+    interp = ser[[c for c in ser.index
+                  if c.startswith(("rd_", "po_", "grp_", "true_", "has_", "n_", "ridge_"))]]
     print("  top interpretable features:")
-    for k, v in interp.head(8).items():
+    for k, v in interp.head(10).items():
         print(f"    {k:<32} {v:.4g}")
 '''
+
 
 INVARIANCE_CELL = '''
 # Three ways the same polymer can be written differently. Permutational

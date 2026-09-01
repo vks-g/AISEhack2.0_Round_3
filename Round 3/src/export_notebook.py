@@ -454,7 +454,21 @@ for name in MODELS:
 stacked_oof, stacked_test, alphas = stack(train_df, base_oof, base_test, test_df, fold_id)
 score_stack, _ = report(train_df, stacked_oof, "stacked")
 
-uni = np.mean([tree_universe[k] for k in tree_universe], axis=0)
+# The universe that fills MISSING partner values must come from models that
+# never saw a true label as a feature. A partner-fed model's prediction for
+# polymer p on property s is a function of p's true value for every OTHER
+# property -- including the one about to be predicted from it. That one-hop
+# cycle inflated the local OOF by +0.008 while contributing nothing on test,
+# where no such labels exist. So the universe is rebuilt here from a
+# partner-free pass.
+print("building the leak-free partner universe ...", flush=True)
+_t_cu = time.time()
+_, _, _cu = per_property_oof(make, "lgbm", train_df, X_tr, test_df, X_te,
+                             fold_id, all_canon, X_all, seed=SEED,
+                             use_partners=False, use_physics_feature=False,
+                             use_partner_ridge=False)
+uni = np.column_stack([_cu[t] for t in TARGETS])
+print(f"  clean universe ({time.time()-_t_cu:.0f}s)")
 universe_by_target = {t: uni[:, i] for i, t in enumerate(TARGETS)}
 partners, is_true = partner_frame(train_df, all_canon, universe_by_target)
 # n_rounds=2 is what was measured locally. The refinement itself is worth only

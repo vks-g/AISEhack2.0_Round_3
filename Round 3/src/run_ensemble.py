@@ -108,7 +108,28 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
         print("\nno tree universe available -- skipping physics")
         return {"mean_r2": score_stack, "oof": st_oof, "test": st_test}
 
-    uni = np.mean([tree_universe[k] for k in tree_universe], axis=0)
+    # The universe that fills MISSING partner values must come from models that
+    # never saw a true label as a feature. A partner-fed model's prediction for
+    # polymer p on property s is a function of p's true value for every OTHER
+    # property -- including the one we are about to predict from it. That closes
+    # a one-hop cycle and inflated OOF by +0.008 (0.9097 -> 0.9014 once removed)
+    # while contributing nothing on test, where no such labels exist.
+    ck = f"cleanuni_f{n_folds}_s{seed}"
+    hit = O.cache_get(ck) if use_cache else None
+    if hit is not None:
+        uni = hit["universe"]
+        print("  clean universe: cached")
+    else:
+        from src.models import trees as _tr
+        t1 = time.time()
+        _, _, cu = O.per_property_oof(_tr.make, "lgbm", train, X_tr, test, X_te,
+                                      fold_id, all_canon, X_all, seed=seed,
+                                      use_partners=False, use_physics_feature=False,
+                                      use_partner_ridge=False)
+        uni = np.column_stack([cu[t] for t in TARGETS])
+        if use_cache:
+            O.cache_put(ck, universe=uni)
+        print(f"  clean universe built ({time.time()-t1:.0f}s)")
     universe_by_target = {t: uni[:, i] for i, t in enumerate(TARGETS)}
     partners, is_true = O.partner_frame(train, all_canon, universe_by_target)
 

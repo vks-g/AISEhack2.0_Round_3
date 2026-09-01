@@ -564,8 +564,12 @@ def apply_physics(train_df, oof, test_df, test_pred, fold_id, partners, is_true,
                 rel = _fit_relation(train_df, rows[tr_m], t, srcs, expr, Pfull)
                 if rel is None:
                     continue
-                e_tr = rel.apply(Pfull.reindex(canon[tr_m])[srcs].values)
-                w, _ = physics.tune_weight(y[tr_m], oof[rows[tr_m]], e_tr)
+                # cross-fitted weight for this level, not one re-tuned here
+                # against an estimate fitted to the same rows
+                wl = weights.get(lvl)
+                if not wl:
+                    continue
+                w = float(np.mean(wl))
                 e_te = rel.apply(Pfull.reindex(tcanon[te_m])[srcs].values)
                 test_out[te[te_m]] = physics.blend(test_out[te[te_m]], e_te, w)
 
@@ -650,11 +654,13 @@ def partner_regression(train_df, pred, test_df, test_pred, fold_id, partners,
             continue
 
         blended = out[rows].copy()
+        fold_ws = []
         for k in np.unique(f):
             a, b = (f != k) & ok, (f == k) & ok
             if a.sum() < 30 or b.sum() == 0:
                 continue
             w, _ = physics.tune_weight(y[a], out[rows[a]], est[a])
+            fold_ws.append(w)
             blended[b] = physics.blend(out[rows[b]], est[b], w)
 
         gain = r2(y, blended) - r2(y, out[rows])
@@ -665,11 +671,19 @@ def partner_regression(train_df, pred, test_df, test_pred, fold_id, partners,
 
         te = np.where((test_df["target_type"] == t).values)[0]
         if len(te):
-            mdl = RidgeCV(alphas=alphas).fit(Xp[ok], y[ok])
-            e_tr = mdl.predict(Xp)
-            w, _ = physics.tune_weight(y, np.asarray(pred, dtype=float)[rows], e_tr)
-            e_te = mdl.predict(design(test_df["canon"].values[te]))
-            test_out[te] = physics.blend(test_out[te], e_te, w)
+            # The test weight MUST be the cross-fitted one. Re-tuning it here
+            # against an in-sample Ridge fit (mdl.predict(Xp) on the very rows
+            # mdl was fitted to) makes the estimate look far better than it is
+            # out of sample, so the weight comes out inflated -- measured
+            # eea 0.003 -> 0.250, ei 0.290 -> 0.550, eps 0.457 -> 0.650 -- and
+            # that inflated weight is then applied to test predictions whose
+            # estimate really is out of sample. It degrades only the test side,
+            # so it is invisible in CV: a pure CV-to-leaderboard gap generator.
+            w = float(np.mean(fold_ws)) if fold_ws else 0.0
+            if w > 0:
+                mdl = RidgeCV(alphas=alphas).fit(Xp[ok], y[ok])
+                e_te = mdl.predict(design(test_df["canon"].values[te]))
+                test_out[te] = physics.blend(test_out[te], e_te, w)
 
     if verbose and info:
         print(f"\n{'target':<7}{'partner-ridge R2':>18}{'blend gain':>13}")

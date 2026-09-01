@@ -26,6 +26,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | lgbm+xgb+cb+mtnn → stack → staged physics → partner regression | 42 | **0.9070** | 0.9088 | 0.9110 | 0.9414 | 0.8549 | 0.9119 | 0.8892 | 0.9316 | — | — | **SHIPPED** (`submissions/final.ipynb`) |
 | 2026-09-01 | + partner-Ridge as a base FEATURE | 42 | **0.9097** | 0.9084 | 0.9159 | 0.9426 | 0.8583 | 0.9128 | 0.8957 | 0.9338 | — | 502s | biggest single feature-level gain |
 | 2026-09-01 | + nested-OOF partner-Ridge feature | 42 | **0.9097** | 0.9085 | 0.9144 | 0.9443 | 0.8557 | 0.9151 | 0.8973 | 0.9329 | — | 1024s | **SHIPPED**; identical mean to the in-sample variant |
+| 2026-09-01 | both leaks fixed: clean universe + cross-fitted test weight | 42 | **0.9014** | 0.9085 | 0.9104 | 0.9432 | 0.8333 | 0.9047 | 0.8842 | 0.9256 | — | 282s | **corrected**; CV was inflated +0.008 by the cycle |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -33,6 +34,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | date | config / notebook | local CV | public LB | pinned? | shared with hosts? |
 |---|---|---|---|---|---|
 | earlier | `submissions/aisehack3-1.ipynb` | OOF ~0.903 | **0.883** | ? | ? |
+| 2026-09-01 | `submissions/final.ipynb` (buggy: cyclic universe + in-sample test weight) | 0.9097 | **0.860** | | |
 | — | `submissions/round-3-aisehack.ipynb` ("v2") | **never scored** | — | — | — |
 
 Confirm the pinned-version and host-sharing columns for the 0.883 submission
@@ -119,6 +121,26 @@ Record what did NOT work here so no session retries it.
   four decimals. Kept because it is the correct construction, not because it
   helps. A base-model gain that survives the stack is the exception, not the
   rule: the stack is already correcting much of what it fixes.
+- **THE BIG ONE — the partner universe was cyclic, and it cost a submission.**
+  `partner_frame()` fills a *missing* partner with a model prediction. But those
+  predictions come from base models that receive `true_<other>` as features, so
+  the value filled into `P[nc][p]` is a function of p's own `eps` label. The
+  physics blend and the partner regression then predict `eps` from it. One hop,
+  and invisible because every individual stage looked correctly cross-fitted.
+  Rebuilding the universe from a partner-FREE pass: **0.9097 → 0.9014 (−0.008)**,
+  and the partner-regression stage's gain collapses from +0.008 to +0.003 on eps,
+  +0.003 on nc, and NEGATIVE on egb/ei. That stage was almost entirely leak.
+- **The test-side blend weight was tuned in-sample — a pure CV-to-LB gap
+  generator.** `partner_regression` re-fitted a RidgeCV on all rows, predicted
+  those same rows, and tuned the blend weight against that in-sample estimate,
+  then applied the weight to genuinely out-of-sample test predictions. Measured
+  inflation: eea 0.003 → 0.250, ei 0.290 → 0.550, eps 0.457 → 0.650. It degrades
+  ONLY the test side, so no amount of CV would ever reveal it. Both stages now
+  reuse the cross-fitted fold weights.
+- **Submitted 0.9097 local → 0.860 public LB.** Worse than the team's existing
+  0.883. The two bugs above account for part of it; roughly 0.02 of gap remains
+  unexplained versus that notebook's own −0.020 CV-to-LB offset. Do not treat a
+  local number from this pipeline as an LB estimate without that offset.
 - **Turn the relation-graph refinement OFF (`n_rounds=0`).** Once the per-fold
   mask is in place it is not merely small, it is slightly negative on the
   four-model stack: 0.9047 with no refinement vs 0.9040 with two rounds. It only

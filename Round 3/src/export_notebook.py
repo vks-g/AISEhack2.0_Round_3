@@ -389,10 +389,18 @@ universe_by_target = {t: uni[:, i] for i, t in enumerate(TARGETS)}
 partners, is_true = partner_frame(train_df, all_canon, universe_by_target)
 # n_rounds=2 is what was measured locally. The refinement itself is worth only
 # ~+0.001 once the per-fold mask is in place -- the mask is the important part.
+# n_rounds=0: the relation-graph refinement measured slightly NEGATIVE on the
+# four-model stack once its per-fold mask was in place (0.9047 vs 0.9040). The
+# masking logic is kept in the code because it documents why the unmasked version
+# was fake, but it ships disabled.
 final_oof, final_test, phys_info = apply_physics(
     train_df, stacked_oof, test_df, stacked_test, fold_id, partners, is_true,
-    n_rounds=2)
-FINAL_SCORE, FINAL_PER = report(train_df, final_oof, "stacked + two-stage physics")
+    n_rounds=0)
+report(train_df, final_oof, "stacked + staged physics")
+
+final_oof, final_test, pr_info = partner_regression(
+    train_df, final_oof, test_df, final_test, fold_id, partners, is_true)
+FINAL_SCORE, FINAL_PER = report(train_df, final_oof, "+ generalized partner regression")
 
 # clip to the observed range: a negative bandgap is not a polymer, and one wild
 # extrapolation can wreck an R2 computed over only ~150 test rows

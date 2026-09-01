@@ -23,6 +23,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | mtnn (multi-task NN, 1 seed) | 42 | 0.8719 | 0.880 | 0.870 | 0.929 | 0.808 | 0.894 | 0.843 | 0.880 | — | 1098s | **best single model**; complementary to the GBDTs |
 | 2026-09-01 | cnn (SMILES 1-D CNN, 1 seed) | 42 | 0.8206 | 0.818 | 0.835 | 0.862 | 0.724 | 0.833 | 0.794 | 0.880 | — | 1276s | dropped — see dead ends |
 | 2026-09-01 | lgbm+xgb+cb+mtnn → stack → staged physics | 42 | **0.9040** | 0.909 | 0.910 | 0.941 | 0.850 | 0.903 | 0.884 | 0.931 | — | — | **shipped config** (`submissions/final.ipynb`) |
+| 2026-09-01 | lgbm+xgb+cb+mtnn → stack → staged physics → partner regression | 42 | **0.9070** | 0.9088 | 0.9110 | 0.9414 | 0.8549 | 0.9119 | 0.8892 | 0.9316 | — | — | **SHIPPED** (`submissions/final.ipynb`) |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -90,6 +91,15 @@ Record what did NOT work here so no session retries it.
 - **A Ridge stack over a single base model makes things slightly worse**
   (0.8645 → 0.8622 on lgbm alone). The meta-learner needs ≥2 decorrelated inputs
   before it earns its variance.
+- **Turn the relation-graph refinement OFF (`n_rounds=0`).** Once the per-fold
+  mask is in place it is not merely small, it is slightly negative on the
+  four-model stack: 0.9047 with no refinement vs 0.9040 with two rounds. It only
+  looked useful (+0.001) against a single weak base model. Keep the code — the
+  masking logic is what documents *why* the naive version was fake — but ship it
+  disabled. Simpler and measured no worse.
+- **The physics blend-weight grid granularity does not matter.** 21 steps, 51
+  steps and a grid extended past 1.0 all give an identical 0.9047. The weight is
+  not being pinned by grid resolution.
 - **The SMILES CNN is not worth its runtime.** Standalone 0.8206 (1276 s/seed).
   Added to lgbm+xgb+cb+mtnn it moves the final score 0.9040 → 0.9045: **+0.0005
   for ~42 min locally and ~2 h of Kaggle CPU at two seeds.** Dropped. It is a

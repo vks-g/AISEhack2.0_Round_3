@@ -118,3 +118,25 @@ over a *single* base model is worse than that model alone (0.8622 vs 0.8645).
 `src/oof.py stack()` therefore defaults to the mean and only tries Ridge when
 there are four or more base models, keeping it per target only where it actually
 wins out-of-fold.
+
+## Beyond the hand-written relations
+
+`physics.RELATIONS` encodes the five expressions a chemist can write down. The
+DFT block is one electronic-structure description, though, so a polymer's other
+measured properties carry more than those five extract.
+
+`src/oof.py partner_regression()` ridge-regresses each target on **all** other
+properties' values plus a measured/predicted flag for each, cross-fitted, and
+blends the result in with a cross-fitted weight. It runs *after* the hand
+relations, on their output, so it subsumes rather than replaces them.
+
+Measured on the four-model stack: **+0.0022 mean, from eps +0.0077 and nc
++0.0067** — again concentrated in the weakest targets. The estimate reaches
+R² 0.84 on eps and 0.90 on nc **from partner values alone, with no molecular
+features at all**, which is a good reminder of how much of this task is the
+co-observation structure rather than the chemistry of any single molecule.
+
+No mask is needed here, unlike the graph refinement: the target's own column is
+excluded from the design matrix and the predicted entries in the other columns
+come from models that never saw this row's label for this target. There is no
+cycle to close.

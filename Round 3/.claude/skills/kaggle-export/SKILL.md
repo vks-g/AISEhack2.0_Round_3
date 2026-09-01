@@ -1,71 +1,87 @@
 ---
 name: kaggle-export
-description: Flatten the local src/ pipeline into one self-contained Kaggle notebook that trains from scratch in a single run. Use when preparing or updating a submission notebook.
+description: Generate the Kaggle submission notebook from src/ and prove it runs end to end. Use when preparing or updating a submission notebook.
 ---
 
 # Export src/ to a Kaggle notebook
 
-The competition is notebook-only (§6.2.2). A prediction file not backed by a
-compliant notebook is invalidated, and after the deadline the hosts execute the
-**pinned** version and require it to reproduce the submitted score exactly (§7.2).
+The notebook is **generated, never hand-edited**, so it cannot drift from the
+code that was scored:
 
-For validating the *output*, use the `submission-check` skill. This skill is
-about producing the notebook.
+```bash
+cd "Round 3"
+./.venv/bin/python -m src.export_notebook --models lgbm,xgb,cb,mtnn,cnn \
+    --out submissions/final.ipynb
+./.venv/bin/python scripts/execute_notebook.py submissions/final.ipynb
+./.venv/bin/python -m src.check_submission /tmp/nbrun/submission.csv
+```
 
-## Cell order
+Edit `src/`, then re-export. Never patch the .ipynb by hand.
 
-1. `!pip install rdkit -q` — the only install; everything else is preinstalled
-2. imports, then a seed block that sets `random`, `numpy`, `torch` and prints
-   every seed it set
-3. `src/smiles_utils.py` — canonicalisation and rewritings
-4. `src/metric.py` — targets and R²
-5. `src/features.py` — **with `use_cache=False`**; strip the `.cache` disk paths
-6. `src/partners.py` + the leakage self-test, which must `raise` on failure
-7. `src/physics.py`
-8. the chosen `src/configs/<name>.py`, inlined
-9. full fit on all of train, then inference on test
-10. `submission.csv` write + `head()` + the per-target range print
-11. explainability section (`src/explain.py` logic)
-12. invariance certificate (`src/invariance.py` logic)
+## What the generator has to handle
 
-No `from src import ...` — Kaggle has no repo. Everything literal.
+Flattening a package into one namespace is where this breaks silently. Each of
+these was a real bug caught by executing the notebook:
+
+- **Intra-package imports** are stripped. An import that was the *body* of a
+  `try:` leaves an empty block, so those are replaced with `pass`, not deleted.
+- **Name collisions.** `models/mtnn.py` and `models/cnn.py` both export
+  `oof_and_test`; inlined unchanged, only the second survives and the notebook
+  silently trains the CNN twice. They are renamed on inlining. Same for the three
+  modules that each define `report`.
+- **Cross-module helpers.** `models/trees.py` imports `params_for` from
+  `configs/lgbm.py`; that function is inlined under the alias trees.py expects,
+  or the notebook dies with `NameError` at the first model.
+- **The disk cache is removed, not neutered.** `features.py` memoises to
+  `.cache/` locally. Leaving even the dead `np.load`/`np.savez` bodies in means a
+  host grepping for artifact I/O gets hits on code that never runs.
 
 ## Rules the export must not break
 
-- **Strip every disk cache.** `src/features.py` memoises to `.cache/` locally so
-  CV iterates in seconds. That directory must not exist in the notebook: §6.2.4
-  bans shipping cached feature files. Featurising all 12,345 molecules from
-  scratch takes ~25 s on 9 processes — it is not a bottleneck, so there is no
-  reason to cache in the notebook at all.
-- **No wall-clock branching.** Anything of the form "train until N hours elapse"
-  makes the run non-reproducible and voids the submission under §7.2. Fixed epoch
-  counts only.
-- **`DATA_DIR` must resolve to the competition dataset alone.** Do not
-  `glob('/kaggle/input/*')` — it can silently pick up an attached dataset, which
-  is a §6.2.1 disqualification. Name the path.
-- **Nothing read that this run did not write.** No pickles, no `.pt`, no
-  embeddings, no `archive/`, no `Round 2 /`.
+- **Nothing read that this run did not write.** No checkpoint import, no feature
+  pickle, no `torch.load`. `submissions/pie-net-v3-checkpoint-run-2.ipynb` globs
+  `/kaggle/input/**/ckpt/manifest.json` to adopt a previous run's output — that
+  is §6.2.4, §6.2.2 and §7.2 at once, and its own docstring says "attach the
+  previous version's output and run again".
+- **No wall-clock branching.** `round-3-aisehack.ipynb` trains
+  `while elapsed < SSL_MAX_HOURS`, which cannot reproduce a pinned score under
+  §7.2. Every loop here is a fixed fold/epoch/iteration count, so a slower
+  machine gives the *same* answer, only later.
+- **`DATA_DIR` from an explicit candidate list**, then at most one shallow scan of
+  the immediate children of `/kaggle/input`. Never a recursive glob — that can
+  adopt an attached dataset (§6.2.1).
 - Seeds set and printed. Output named exactly `submission.csv`.
 
-## Runtime budget
+## Verify before submitting — all four
 
-Budget the full fit locally first and write the measured number into the notebook
-header. For reference on this machine: featurisation ~25 s, and the `lgbm` config
-is 377 s for a full 10/15-fold CV, so a single full fit is far less.
+```bash
+# 1. structure: syntax, duplicate defs, forbidden patterns
+./.venv/bin/python -c "import json,ast,re,collections; \
+nb=json.load(open('submissions/final.ipynb')); \
+cc=[''.join(c['source']) for c in nb['cells'] if c['cell_type']=='code']; \
+w=chr(10).join(cc); \
+print({b:w.count(b) for b in ['torch.load','pickle.load','np.load(','MAX_HOURS','from_pretrained','torch.hub','from src'] if w.count(b)} or 'clean')"
 
-`submissions/round-3-aisehack.ipynb` (the unscored "v2") adds an MPNN, a 5-seed
-CNN, per-fold feature selection and a 2-hour SSL branch. Its total runtime very
-likely exceeds a single Kaggle session, which produces **no submission at all**.
-Time it before trusting it.
+# 2. it actually runs, and writes a submission
+./.venv/bin/python scripts/execute_notebook.py submissions/final.ipynb
 
-## The two notebooks already in this repo
+# 3. the submission is valid
+./.venv/bin/python -m src.check_submission /tmp/nbrun/submission.csv
 
-- `submissions/aisehack3-1.ipynb` — **the incumbent, public LB 0.883**, OOF ~0.903.
-- `submissions/round-3-aisehack.ipynb` — "v2", never scored. Its own markdown
-  admits it. It drops ingest canonicalisation (weakening the invariance claim
-  from exact to approximate), replaces the two-pass physics blend with a single
-  coalesced pass fitted across two populations, adds a hard `import shap` that v1
-  had deliberately engineered away, and still warns `len(test_df) != 4497` on
-  every correct run. Treat it as a candidate to be scored, not as the incumbent.
+# 4. the notebook's own asserts passed (invariance certificate + compliance audit)
+```
 
-Score anything through `src.cv` before it gets a slot.
+The notebook carries two `assert`s on purpose: permutational invariance must be
+exact, and the compliance audit must find no other attached dataset. If either
+fails the notebook fails loudly rather than producing a quietly wrong submission.
+
+## Runtime
+
+Measured locally on 11 cores, per full OOF pass: featurisation 25 s, LightGBM
+343 s, XGBoost 232 s, CatBoost 486 s, multi-task NN 1098 s per seed, SMILES CNN
+~1100 s per seed, stack+physics ~10 s. Kaggle CPU gives 4 cores, so expect ~2.5x
+— on the order of 3-4 hours with two NN seeds, inside the 12-hour limit. A GPU
+session cuts the two neural models sharply.
+
+`NN_SEEDS` is the runtime dial. Drop it to `[42]` if a session is at risk; the
+cost is the seed-averaging benefit, not correctness.

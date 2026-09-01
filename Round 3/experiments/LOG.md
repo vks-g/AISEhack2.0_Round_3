@@ -20,6 +20,9 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | xgb  (partners+physics-feat) | 42 | 0.8629 | | | | | | | | — | 232s | base model only |
 | 2026-09-01 | cb   (partners+physics-feat) | 42 | 0.8677 | | | | | | | | — | 486s | **best single base model** |
 | 2026-09-01 | lgbm+xgb+cb → stack → staged physics | 42 | **0.8974** | 0.9064 | 0.9073 | 0.9327 | 0.8446 | 0.8827 | 0.8788 | 0.9295 | — | 1065s | per-property folds, partner feats, staged+masked physics. **New best.** |
+| 2026-09-01 | mtnn (multi-task NN, 1 seed) | 42 | 0.8719 | 0.880 | 0.870 | 0.929 | 0.808 | 0.894 | 0.843 | 0.880 | — | 1098s | **best single model**; complementary to the GBDTs |
+| 2026-09-01 | cnn (SMILES 1-D CNN, 1 seed) | 42 | 0.8206 | 0.818 | 0.835 | 0.862 | 0.724 | 0.833 | 0.794 | 0.880 | — | 1276s | dropped — see dead ends |
+| 2026-09-01 | lgbm+xgb+cb+mtnn → stack → staged physics | 42 | **0.9040** | 0.909 | 0.910 | 0.941 | 0.850 | 0.903 | 0.884 | 0.931 | — | — | **shipped config** (`submissions/final.ipynb`) |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -87,6 +90,11 @@ Record what did NOT work here so no session retries it.
 - **A Ridge stack over a single base model makes things slightly worse**
   (0.8645 → 0.8622 on lgbm alone). The meta-learner needs ≥2 decorrelated inputs
   before it earns its variance.
+- **The SMILES CNN is not worth its runtime.** Standalone 0.8206 (1276 s/seed).
+  Added to lgbm+xgb+cb+mtnn it moves the final score 0.9040 → 0.9045: **+0.0005
+  for ~42 min locally and ~2 h of Kaggle CPU at two seeds.** Dropped. It is a
+  genuinely decorrelated view (it reads the SMILES string, not descriptors), but
+  decorrelation at 0.82 does not buy enough against a 0.90 stack.
 - **Cheap diverse models (kNN on Morgan bits, ExtraTrees, Ridge) do not help the
   stack.** Standalone with partner features: knn 0.7412 (29s), ridge 0.5939 (4s).
   Adding them to lgbm+xgb+cb+mtnn moved the final score 0.9040 → 0.9034 (knn) and

@@ -20,22 +20,25 @@ are wrong — one of them (the test row count) has already cost this repo a bug.
 
 ### Base models, measured *(per-property folds, partner features, physics feature)*
 
-| model | mean R² | tg | egc | egb | eps | nc | ei | eea | wall |
+| model | mean R² | tg | egc | egb | eps | nc | ei | eea | wall/seed |
 |---|---|---|---|---|---|---|---|---|---|
 | lgbm | 0.8645 | 0.906 | 0.904 | 0.900 | 0.781 | 0.853 | 0.811 | 0.883 | 343s |
 | xgb | 0.8629 | | | | | | | | 232s |
 | cb | 0.8677 | | | | | | | | 486s |
 | **mtnn** | **0.8719** | 0.880 | 0.870 | 0.929 | 0.808 | 0.894 | 0.843 | 0.880 | 1098s |
+| cnn | 0.8206 | 0.818 | 0.835 | 0.862 | 0.724 | 0.833 | 0.794 | 0.880 | 1276s |
 | stack of 4 | 0.8950 | | | | | | | | — |
 | **+ staged physics** | **0.9040** | 0.909 | 0.910 | 0.941 | 0.850 | 0.903 | 0.884 | 0.931 | — |
 
-The multi-task NN is the best single model and, more importantly, the most
-*complementary* one: worse than the GBDTs on tg/egc but far better on egb, nc and
-ei. That decorrelation is what took the stack from 0.8713 (three GBDTs) to
-0.8950. With it in the mix the cross-fitted Ridge combiner beats a plain mean on
-every target; without it, the mean wins.
+**Shipped set: `lgbm + xgb + cb + mtnn`.** The multi-task NN is the best single
+model and, more importantly, the most *complementary*: worse than the GBDTs on
+tg/egc but far better on egb, nc and ei. That decorrelation took the stack from
+0.8713 (three GBDTs) to 0.8950. With it present the cross-fitted Ridge combiner
+beats a plain mean on every target; without it, the mean wins.
 
-Read `experiments/LOG.md` before doing anything. A SessionStart hook prints it.
+Diversity only pays when the added model is also strong. Measured additions to
+the 0.9040 stack: a fourth booster +0.0001, the SMILES CNN +0.0005 (for ~2 h of
+Kaggle CPU at two seeds — dropped), kNN **−0.0006**, kNN+Ridge **−0.0003**.
 
 ## Metric
 

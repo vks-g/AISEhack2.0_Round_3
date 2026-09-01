@@ -310,7 +310,18 @@ def build(models, out_path):
     cells.append(code("from sklearn.linear_model import Ridge\n\n" + _oof))
 
     cells.append(md("## 10. Run the pipeline and write `submission.csv`"))
-    cells.append(code(RUN_CELL.replace("__MODELS__", repr(list(models)))))
+    # Emit dispatch branches only for the models actually included, so the
+    # notebook never references a function that was not inlined.
+    branches = []
+    if "mtnn" in models:
+        branches.append('    elif name == "mtnn":\n'
+                        '        o, te = mtnn_oof_and_test(train_df, X_tr, test_df, X_te, fold_id, NN_SEEDS)')
+    if "cnn" in models:
+        branches.append('    elif name == "cnn":\n'
+                        '        o, te = cnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)')
+    run = (RUN_CELL.replace("__MODELS__", repr(list(models)))
+                   .replace("__MODEL_BRANCHES__", "\n".join(branches) if branches else "    # (no neural models in this build)"))
+    cells.append(code(run))
 
     cells.append(md("## 11. Explainability — per-target TreeSHAP\n\n"
                     "Exact SHAP values from LightGBM's own `pred_contrib=True`: the same "
@@ -357,10 +368,7 @@ for name in MODELS:
         o, te, uni = per_property_oof(make, name, train_df, X_tr, test_df, X_te,
                                       fold_id, all_canon, X_all, seed=SEED)
         tree_universe[name] = np.column_stack([uni[t] for t in TARGETS])
-    elif name == "mtnn":
-        o, te = mtnn_oof_and_test(train_df, X_tr, test_df, X_te, fold_id, NN_SEEDS)
-    elif name == "cnn":
-        o, te = cnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)
+__MODEL_BRANCHES__
     else:
         raise ValueError(name)
     base_oof[name], base_test[name] = np.asarray(o), np.asarray(te)

@@ -206,11 +206,44 @@ def featurize(smiles, n_jobs: int | None = None, use_cache: bool = True) -> np.n
 
 
 def _compute(uniq: list[str], n_jobs: int | None):
+    """Featurise a list of SMILES, in parallel when that is actually available.
+
+    The parallel path is a convenience, not a requirement. Inside a notebook
+    every function lives in `__main__`, and a spawn-based ProcessPoolExecutor
+    cannot pickle it -- so this raises `PicklingError` in Jupyter on macOS and
+    Windows, and only survives on Linux because fork copies the address space.
+    Relying on that would make the submission notebook platform-dependent, so any
+    failure falls back to a serial loop: ~200 s for all 12,345 molecules, which
+    is a rounding error against the model training that follows.
+    """
     n_jobs = n_jobs or max(1, (os.cpu_count() or 4) - 2)
-    if n_jobs > 1 and len(uniq) > 200:
-        with ProcessPoolExecutor(max_workers=n_jobs) as ex:
-            return list(ex.map(featurize_one, uniq, chunksize=32))
+    if n_jobs > 1 and len(uniq) > 200 and _parallel_safe():
+        try:
+            with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+                return list(ex.map(featurize_one, uniq, chunksize=32))
+        except Exception as exc:      # PicklingError, BrokenProcessPool, OSError
+            print(f"featurize: parallel path failed ({type(exc).__name__}); "
+                  f"falling back to serial")
     return [featurize_one(s) for s in uniq]
+
+
+def _parallel_safe() -> bool:
+    """Whether a process pool can actually run `featurize_one`.
+
+    With the `fork` start method (Linux, so Kaggle) the child inherits the
+    address space and any function works. With `spawn` (macOS, Windows) the
+    child re-imports the function by qualified name, which is impossible when it
+    was defined in a notebook cell -- everything there lives in `__main__`.
+    Probing that up front avoids a BrokenProcessPool and the wall of child
+    tracebacks it prints before the fallback catches it.
+    """
+    import multiprocessing as mp
+    try:
+        if mp.get_start_method(allow_none=False) == "fork":
+            return True
+    except Exception:
+        return False
+    return getattr(featurize_one, "__module__", "__main__") != "__main__"
 
 
 def warm_cache(*frames) -> None:

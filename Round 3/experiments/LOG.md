@@ -25,6 +25,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | lgbm+xgb+cb+mtnn → stack → staged physics | 42 | **0.9040** | 0.909 | 0.910 | 0.941 | 0.850 | 0.903 | 0.884 | 0.931 | — | — | **shipped config** (`submissions/final.ipynb`) |
 | 2026-09-01 | lgbm+xgb+cb+mtnn → stack → staged physics → partner regression | 42 | **0.9070** | 0.9088 | 0.9110 | 0.9414 | 0.8549 | 0.9119 | 0.8892 | 0.9316 | — | — | **SHIPPED** (`submissions/final.ipynb`) |
 | 2026-09-01 | + partner-Ridge as a base FEATURE | 42 | **0.9097** | 0.9084 | 0.9159 | 0.9426 | 0.8583 | 0.9128 | 0.8957 | 0.9338 | — | 502s | biggest single feature-level gain |
+| 2026-09-01 | + nested-OOF partner-Ridge feature | 42 | **0.9097** | 0.9085 | 0.9144 | 0.9443 | 0.8557 | 0.9151 | 0.8973 | 0.9329 | — | 1024s | **SHIPPED**; identical mean to the in-sample variant |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -109,11 +110,15 @@ Record what did NOT work here so no session retries it.
   Same shape of mistake as the relation-graph refinement: any partner value that
   is itself a model output can close a cycle. Check the provenance of every cell
   before using it as an input.
-- **Compute that feature out-of-fold for the training rows too.** An in-sample
-  Ridge fit is unrealistically accurate on the rows it was fitted on, so the tree
-  over-trusts a column that is weaker at inference — the classic target-encoding
-  failure. Nested 5-fold, measured on lgbm with the mean-filled block:
-  eps +0.0023, nc +0.0042, ei +0.0027.
+- **Nested-OOF for that feature is principled but does not move the score.** An
+  in-sample Ridge fit is unrealistically accurate on the rows it was fitted on,
+  so the tree over-trusts a column that is weaker at inference — the classic
+  target-encoding failure. A nested 5-fold fixes it and is worth +0.002 to +0.004
+  at the *base-model* level (eps +0.0023, nc +0.0042, ei +0.0027), but through
+  the stack and physics the final score is **0.9097 either way** — identical to
+  four decimals. Kept because it is the correct construction, not because it
+  helps. A base-model gain that survives the stack is the exception, not the
+  rule: the stack is already correcting much of what it fixes.
 - **Turn the relation-graph refinement OFF (`n_rounds=0`).** Once the per-fold
   mask is in place it is not merely small, it is slightly negative on the
   four-model stack: 0.9047 with no refinement vs 0.9040 with two rounds. It only

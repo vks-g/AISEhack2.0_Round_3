@@ -106,13 +106,13 @@ layers, lr 1.5e-3, batch 128 -- costs **135 s per fold per seed on a T4**.
 | stage | projected on T4 | note |
 |---|---|---|
 | featurisation (12,345 molecules) | ~150 s | 3037 features |
-| LightGBM / XGBoost / CatBoost | ~4,300 s | CPU-side, 4 cores |
+| LightGBM / XGBoost / CatBoost | ~5,330 s | CPU-side, 4 cores; tg/egc folds +40% |
 | leak-free universe pass | ~1,400 s | a second partner-free LightGBM |
-| multi-task NN | ~6,560 s | **8 seeds** |
-| **periodic GNN** | **~10,125 s** | **5 seeds x 110 epochs x 15 folds** |
+| multi-task NN | ~6,545 s | **6 seeds**, on +33% rows |
+| **periodic GNN** | **~7,180 s** | **4 seeds x 110 epochs x 10 folds**, on +33% rows |
 | stack + physics + partner regression | ~60 s | |
 | explainability + invariance + domain | ~800 s | |
-| **total** | **~6.5 h** | inside a 9 h GPU session |
+| **total** | **~6.1 h** | inside a 9 h GPU session (7.9 h at +30%) |
 
 The graph net dominates, as it should -- it is the strongest single model.
 
@@ -172,12 +172,11 @@ import catboost as cb
 
 SEED = 42
 N_FOLDS = 10
-NN_SEEDS = [42, 202, 777, 1337, 2024, 3407, 5150, 8888]   # 8 seeds. Their leave-one-out makes
-                                        # the NN the most valuable model (-0.0061 to the stack,
-                                        # -0.0217 on ei) and seed variance its weakness:
-                                        # single seeds averaged 0.8800, the 5-seed mean 0.8935.
+NN_SEEDS = [42, 202, 777, 1337, 2024, 3407]   # 6 seeds. Seed averaging is the measured
+                                        # lever: their single seeds averaged 0.8800, the
+                                        # 5-seed mean 0.8935 (+0.0135).
+GNN_SEEDS = [42, 202, 777, 1337]        # 4 seeds; second most valuable model (-0.0048)
 AUX_MAX = 300_000             # auxiliary-corpus sample for the applicability domain
-GNN_SEEDS = [42, 202, 777, 1337, 2024]  # 5 seeds; second most valuable model (-0.0048 if removed)
 # Both are FIXED, not chosen from the hardware. Branching the seed count on
 # whether a GPU is present would make the pinned run irreproducible on a
 # different machine, which rule 7.2 does not allow. A CPU-only session simply
@@ -953,6 +952,54 @@ archive_df, ARCHIVE_OK, ARCHIVE_SRC = archive_load(
 if ARCHIVE_OK:
     archive_report(archive_df, train_df, test_df)
 set_archive(archive_df if ARCHIVE_OK else None)
+
+# --------------------------------------------------------------------------
+# THIRD use of the archive: its labels as actual TRAINING ROWS.
+#
+# The first two uses are partner features and the test-row override. This adds
+# the 2,446 (molecule, property) labels train.csv does not already carry --
+# +33% training rows, all tg or egc.
+#
+# Who benefits. The boosters are per-property, so they only see more tg/egc, and
+# those two are already the most saturated targets. The real argument is the
+# multi-task models: the NN and the GNN share one trunk across seven heads, so a
+# 40% larger tg/egc block improves the representation the five scarce targets --
+# 5/7 of the metric -- ride on.
+#
+# STATED HONESTLY: UNMEASURED here. Adopted from a teammate notebook whose own
+# justification is the trunk argument above. Set False to drop it.
+#
+# Leak safety is unchanged. These are ordinary labelled rows: assigned to folds
+# like any other, drop_leaky() still removes a row's own true_{target}, and
+# apply_physics still masks the target's own partner column per fold. Every
+# molecule is already in the featurised train+test union, so nothing new is
+# featurised and no row can arrive without features.
+# --------------------------------------------------------------------------
+ADD_ARCHIVE_ROWS = True
+
+if ARCHIVE_OK and ADD_ARCHIVE_ROWS:
+    _have = set(zip(train_df["canon"], train_df["target_type"]))
+    _pool = set(train_df["canon"]) | set(test_df["canon"])
+    _keep = [(c in _pool) and ((c, t) not in _have)
+             for c, t in zip(archive_df["canon"], archive_df["target_type"])]
+    _new = archive_df[_keep]
+    _outside = int(sum(c not in _pool for c in archive_df["canon"]))
+    if _outside:
+        print(f"  {_outside} archive molecules outside the featurised pool -- dropped")
+    if len(_new):
+        _add = pd.DataFrame({"canon": _new["canon"].values,
+                             "smiles": _new["canon"].values,
+                             "target": _new["target"].values.astype(float),
+                             "target_type": _new["target_type"].values})
+        _before = len(train_df)
+        train_df = pd.concat([train_df, _add[train_df.columns]], ignore_index=True)
+        print(f"archive rows added to TRAINING set: {len(_add)} "
+              f"({_before} -> {len(train_df)} rows, +{100*len(_add)/_before:.0f}%)")
+        for _t in sorted(_add["target_type"].unique()):
+            _n = int((_add["target_type"] == _t).sum())
+            _b = int((train_df["target_type"] == _t).sum()) - _n
+            print(f"   {_t:4s} {_b} -> {_b + _n}  (+{100*_n/max(_b,1):.0f}%)")
+        assert train_df["target"].notna().all(), "archive rows introduced a NaN target"
 '''
 
 AUDIT_CELL = '''

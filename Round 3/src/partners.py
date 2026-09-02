@@ -30,14 +30,55 @@ from src.metric import TARGETS
 DFT_PROPS = ["egc", "egb", "eps", "nc", "ei", "eea"]
 
 
+# ---------------------------------------------------------------------------
+# Host-sanctioned Round-2 archive labels (see src/archive.py).
+#
+# A module-level registry rather than a threaded argument: `build()` is called
+# from four places inside per_property_oof and partner_frame is called from
+# run_ensemble, and one global that is set exactly once at load time is far
+# easier to audit than five signatures that must all agree.
+#
+# SAFETY. These are extra values for `tg` and `egc` only. `drop_leaky()` still
+# removes `true_{target}`/`has_{target}` for the row being predicted, and
+# apply_physics masks the target's own partner column per fold, so an archive
+# label can only ever enter as a SOURCE property, never as the row's own answer.
+# `tg` is not in DFT_PROPS at all, so the sole feature effect is wider `true_egc`
+# coverage -- which is exactly the coverage the test set has.
+# ---------------------------------------------------------------------------
+_ARCHIVE = None          # long format: canon, target_type, target
+
+
+def set_archive(df) -> None:
+    """Register (or clear, with None) the archive label table."""
+    global _ARCHIVE
+    _ARCHIVE = df
+
+
+def get_archive():
+    return _ARCHIVE
+
+
+def label_pool(train_fold: pd.DataFrame) -> pd.DataFrame:
+    """Training-fold labels plus the archive, long format.
+
+    Duplicate (canon, target_type) keys are left in place; every consumer
+    aggregates with mean, and the two sources agree where they overlap.
+    """
+    cols = ["canon", "target_type", "target"]
+    base = train_fold[cols]
+    if _ARCHIVE is None or len(_ARCHIVE) == 0:
+        return base
+    return pd.concat([base, _ARCHIVE[cols]], ignore_index=True)
+
+
 def build(train_fold: pd.DataFrame, frames: list[pd.DataFrame]):
     """Return (list_of_feature_frames, column_names).
 
     `train_fold` supplies the labels. `frames` are the frames to featurise
     (typically [train_fold, valid_fold] or [train, test]).
     """
-    wide = train_fold.pivot_table(index="canon", columns="target_type",
-                                  values="target", aggfunc="mean")
+    wide = label_pool(train_fold).pivot_table(index="canon", columns="target_type",
+                                              values="target", aggfunc="mean")
     cols, fills = [], {}
     for p in DFT_PROPS:
         if p not in wide.columns:

@@ -59,19 +59,24 @@ of leaderboard position:
 
 - **No external data. No pretrained weights, checkpoints, embeddings, or any
   uploaded artifact.** Everything trains from scratch inside a single Kaggle
-  notebook run.
-- **Nothing may be read that the notebook run did not itself write.** That
+  notebook run. **One sanctioned exception:** the Round-2 label file that the
+  official `Round 3/data/base_line_model.ipynb` itself downloads (Drive ID
+  `1QU-Fyff…`, 6171 `tg`/`egc` labels). The hosts were asked directly and
+  confirmed it is in scope. See `Round 3/src/archive.py` and the LOG entry.
+- **Nothing else may be read that the notebook run did not itself write.** That
   includes any feature cache, any `.pkl`/`.pt`, and anything under `archive/` or
-  `Round 2 /` — those are external data now.
+  `Round 2 /` — those remain external data.
 - Seeds set and printed; the pinned notebook version must reproduce the submitted
   score exactly, so no branching on wall-clock time.
 - Public GitHub *code* is allowed. Public *weights* are not.
 - Output file named exactly `submission.csv`.
 
 Round 2 notebooks predate these clauses. `notebook4_krishna.ipynb` reads
-`archive/train.csv` and merges labels from it — under Round 3 rules that is
-external data and an instant disqualification. Mine those notebooks for
-technique, never copy their I/O.
+`archive/train.csv` — a *local* copy, which is still not permitted I/O even
+though the same labels are now sanctioned via the baseline's own Drive fetch.
+Mine those notebooks for technique; take the archive only through
+`Round 3/src/archive.py`, which validates what it loads and declares it in the
+compliance audit.
 
 ## Never read into context
 

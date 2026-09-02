@@ -14,5 +14,5 @@ Round 3/experiments/runs/*_oof.npy
 
 .DS_Store
 
-# Round 2 screenshots -- already mirrored as markdown in Round 3/context/
-Round 2 /Info.zip
+# zips duplicate context/*.md and are never inputs to a run
+*.zip

@@ -20,6 +20,8 @@ Design constraints, each one a rule the team's earlier notebooks broke:
 from __future__ import annotations
 
 import argparse
+import sys
+import pathlib
 import json
 import re
 from pathlib import Path
@@ -333,6 +335,33 @@ def build(models, out_path, physics_stage=True):
         "build": "partners_build",
         "drop_leaky": "partners_drop_leaky",
         "assert_no_leak": "partners_assert_no_leak"})))
+    cells.append(md("## 7b. Round-2 archive — host-sanctioned extra `tg`/`egc` labels\n\n"
+                    "`data/base_line_model.ipynb`, the baseline shipped *with* this competition,\n"
+                    "fetches its data from two Google Drive IDs that still point at the Round-2\n"
+                    "release. **The two are swapped relative to their `-O` names** *(measured)*:\n"
+                    "`1ZYfvPAt` serves an unlabelled file, `1QU-Fyff` the labelled one (6171 rows,\n"
+                    "`tg` + `egc`). Both are tried and whichever validates as a two-property label\n"
+                    "table is kept.\n\n"
+                    "Measured against Round 3: 3719 of its labels are already in `train.csv`, 2450\n"
+                    "are rows of `test.csv`, and **0 are new training rows**. Where it overlaps\n"
+                    "`train.csv` the values are identical, so these are the same measurements.\n\n"
+                    "The hosts were asked directly whether this file is in scope and confirmed that\n"
+                    "it is. It is used the two ways `submissions/round3_final.ipynb` uses it: as\n"
+                    "extra **partner labels** (widening `true_egc` test coverage 15.3% -> 38.1%,\n"
+                    "which feeds `egb`/`ei`/`eea` through the physics relations) and as a direct\n"
+                    "**override** on the test rows it labels, applied last in section 11.\n\n"
+                    "Because every archive row is either already in `train.csv` or is a test row,\n"
+                    "this **cannot move cross-validation** — CV rows gain no label they did not\n"
+                    "already have. A flat CV here is the expected result, not a failure.\n\n"
+                    "If the file is unavailable (no internet and nothing attached) the pipeline\n"
+                    "prints a warning and runs archive-free rather than failing."))
+    cells.append(code(strip("archive.py", {
+        "load": "archive_load", "report": "archive_report",
+        "override": "archive_override", "_validate": "_arch_validate",
+        "_candidates": "_arch_candidates", "_prepare": "_arch_prepare"})))
+    cells.append(code(ARCHIVE_CELL))
+
+    # run the guard WITH the archive registered: it must still hold
     cells.append(code("partners_assert_no_leak(train_df)"))
 
     cells.append(md("## 8. Physics relations between the DFT properties\n\n"
@@ -551,6 +580,12 @@ if bad.any():
             final[m] = float(train_df.loc[train_df.target_type == t, "target"].mean())
     print(f"replaced {int(bad.sum())} non-finite predictions with the per-target mean")
 
+# The archive override goes LAST, so a measured value is never clipped or
+# perturbed by a downstream stage.
+_ov = np.zeros(0, dtype=int)
+if ARCHIVE_OK:
+    final, _ov = archive_override(test_df, final, archive_df)
+
 submission = pd.DataFrame({"id": test_df["id"].values, "target": final})
 submission.to_csv(os.path.join(WORK_DIR, "submission.csv"), index=False)
 print(f"\\nwrote submission.csv: {len(submission)} rows   total {time.time()-t_start:.0f}s")
@@ -659,43 +694,49 @@ print("not. That is why the intensive twins exist -- a design choice about")
 print("invariance, not simply extra columns.")
 
 print()
-print("2. GRAPH READOUT ABLATION -- untrained net, so this is a property of the")
-print("   architecture rather than of any particular fit.")
-print()
-_tor.manual_seed(0)
-_net_mm = _GNet(GNN_HP, len(TARGETS)).eval()
+# The ablation exercises the GNN's own readout, so it only exists when the GNN
+# was exported. Guarded rather than assumed: a reduced export (say lgbm+xgb for a
+# fast verification run) otherwise dies here on a NameError.
+if "gnn" not in MODELS:
+    print("2. GRAPH READOUT ABLATION -- skipped, the GNN is not in MODELS")
+else:
+  print("2. GRAPH READOUT ABLATION -- untrained net, so this is a property of the")
+  print("   architecture rather than of any particular fit.")
+  print()
+  _tor.manual_seed(0)
+  _net_mm = _GNet(GNN_HP, len(TARGETS)).eval()
 
 
-class _SumReadout(_GNet):
-    def forward(self, nf, src, dst, ef, batch, ng):
-        x = self.embed(nf)
-        ea = self.eemb(ef) if ef.numel() else _tor.zeros(0, x.shape[1])
-        for L in self.layers:
-            x = L(x, src, dst, ea)
-        z = _tor.zeros(ng, x.shape[1], dtype=x.dtype).index_add_(0, batch, x)
-        h = self.head(_tor.cat([z, z], dim=1))
-        return _tor.cat([o(h) for o in self.out], dim=1)
+  class _SumReadout(_GNet):
+      def forward(self, nf, src, dst, ef, batch, ng):
+          x = self.embed(nf)
+          ea = self.eemb(ef) if ef.numel() else _tor.zeros(0, x.shape[1])
+          for L in self.layers:
+              x = L(x, src, dst, ea)
+          z = _tor.zeros(ng, x.shape[1], dtype=x.dtype).index_add_(0, batch, x)
+          h = self.head(_tor.cat([z, z], dim=1))
+          return _tor.cat([o(h) for o in self.out], dim=1)
 
 
-_tor.manual_seed(0)
-_net_sum = _SumReadout(GNN_HP, len(TARGETS)).eval()
+  _tor.manual_seed(0)
+  _net_sum = _SumReadout(GNN_HP, len(TARGETS)).eval()
 
 
-def _gpred(model, ss):
-    g = [periodic_graph(s) for s in ss]
-    with _tor.no_grad():
-        NF, S, D, EF, B, ng = _gcollate(g, list(range(len(g))), "cpu")
-        return model(NF, S, D, EF, B, ng).numpy()
+  def _gpred(model, ss):
+      g = [periodic_graph(s) for s in ss]
+      with _tor.no_grad():
+          NF, S, D, EF, B, ng = _gcollate(g, list(range(len(g))), "cpu")
+          return model(NF, S, D, EF, B, ng).numpy()
 
 
-print(f"{'readout':<20}{'rewriting':<28}{'median |d|':>13}{'max |d|':>12}{'exact':>8}")
-for _tag, _mdl in (("mean+max (shipped)", _net_mm), ("sum (conventional)", _net_sum)):
-    _b = _gpred(_mdl, [canonicalize(s) for s in _sample])
-    for _lab, _fn in _REW:
-        _v = _gpred(_mdl, [canonicalize(_fn(s)) for s in _sample])
-        _d = np.abs(_v - _b).max(axis=1)
-        print(f"{_tag:<20}{_lab:<28}{np.median(_d):>13.2e}{_d.max():>12.2e}"
-              f"{(_d < 1e-9).mean() * 100:>7.0f}%")
+  print(f"{'readout':<20}{'rewriting':<28}{'median |d|':>13}{'max |d|':>12}{'exact':>8}")
+  for _tag, _mdl in (("mean+max (shipped)", _net_mm), ("sum (conventional)", _net_sum)):
+      _b = _gpred(_mdl, [canonicalize(s) for s in _sample])
+      for _lab, _fn in _REW:
+          _v = _gpred(_mdl, [canonicalize(_fn(s)) for s in _sample])
+          _d = np.abs(_v - _b).max(axis=1)
+          print(f"{_tag:<20}{_lab:<28}{np.median(_d):>13.2e}{_d.max():>12.2e}"
+                f"{(_d < 1e-9).mean() * 100:>7.0f}%")
 print()
 print("Atom ordering is EXACT for both -- every feature derives from the canonical")
 print("SMILES and canonicalisation is idempotent. Repeat count is where the two")
@@ -812,6 +853,17 @@ except Exception as _e:
 '''
 
 
+ARCHIVE_CELL = '''
+# USE_ARCHIVE = False reproduces the archive-free pipeline exactly.
+USE_ARCHIVE = True
+
+archive_df, ARCHIVE_OK, ARCHIVE_SRC = archive_load(
+    data_dir=DATA_DIR, use_archive=USE_ARCHIVE, allow_download=True)
+if ARCHIVE_OK:
+    archive_report(archive_df, train_df, test_df)
+set_archive(archive_df if ARCHIVE_OK else None)
+'''
+
 AUDIT_CELL = '''
 import glob as _glob
 _fail, _warn = [], []
@@ -838,15 +890,37 @@ for _t in TARGETS:
     print(f"  {_t:<4} n={len(_v):<5} pred [{_v.min():9.4g}, {_v.max():9.4g}]"
           f"   train [{_o.min():9.4g}, {_o.max():9.4g}]")
 
+# Only the competition data and the host-sanctioned Round-2 archive may be
+# attached. The archive is declared, not silently tolerated: if the run used one,
+# its source is named here and in the label-source line below.
+_arch_root = ""
+if ARCHIVE_OK and str(ARCHIVE_SRC).startswith("/kaggle/input"):
+    _arch_root = "/".join(str(ARCHIVE_SRC).split("/")[:4])   # /kaggle/input/<dataset>
 _others = [p for p in _glob.glob("/kaggle/input/*")
-           if os.path.abspath(p) != os.path.abspath(DATA_DIR)]
+           if os.path.abspath(p) != os.path.abspath(DATA_DIR)
+           and os.path.abspath(p) != os.path.abspath(_arch_root or "/__no_such_input__")]
 if _others:
-    _fail.append(f"other datasets attached: {_others} -- rule 6.2.1 requires only competition data")
+    _fail.append(f"unexpected datasets attached: {_others} -- only the competition data "
+                 f"and the host-sanctioned Round-2 archive may be inputs")
+
+# Prove no label outside train.csv + the archive ever entered the partner table.
+_pool_keys = set(zip(train_df["canon"], train_df["target_type"]))
+if ARCHIVE_OK:
+    _pool_keys |= set(zip(archive_df["canon"], archive_df["target_type"]))
+_reg = get_archive()
+if _reg is not None:
+    _stray = set(zip(_reg["canon"], _reg["target_type"])) - _pool_keys
+    if _stray:
+        _fail.append(f"{len(_stray)} partner labels from neither train.csv nor the archive")
 
 print()
 print(f"data read from : {DATA_DIR}")
 print(f"other inputs   : {_others or 'none'}")
 print(f"seeds          : SEED={SEED}, NN_SEEDS={NN_SEEDS} (set and printed at the top)")
+print(f"label sources  : train.csv"
+      + (f" + Round-2 archive ({ARCHIVE_SRC}), host-sanctioned" if ARCHIVE_OK else " only"))
+print(f"archive override: {len(_ov)} of {len(_test)} test rows"
+      if ARCHIVE_OK else "archive override: not applied")
 print(f"artifacts read : none (nothing deserialised from disk; no checkpoint import)")
 print(f"wall-clock deps: none (every loop is a fixed fold/epoch count)")
 print(f"local OOF score: {FINAL_SCORE:.4f}")
@@ -869,3 +943,15 @@ if __name__ == "__main__":
     models = [m.strip() for m in a.models.split(",") if m.strip()]
     nb = build(models, a.out, physics_stage=not a.no_physics)
     print(f"wrote {a.out}: {len(nb['cells'])} cells, models={models}, physics={not a.no_physics}")
+
+    # Gate the export on static name resolution. Inlining drops every intra-package
+    # import, so a surviving `trees.make(...)` parses fine and only raises NameError
+    # when that line executes -- which for ionic_term was 542 seconds into a run.
+    # One second here beats rediscovering it on Kaggle.
+    import subprocess
+    _allow = [] if "gnn" in models else ["GNN_HP", "_GNet", "_gcollate", "periodic_graph"]
+    _cmd = [sys.executable, str(pathlib.Path(__file__).parent.parent / "scripts" / "lint_notebook.py"), a.out]
+    if _allow:
+        _cmd += ["--allow", ",".join(_allow)]
+    if subprocess.run(_cmd).returncode:
+        raise SystemExit("export FAILED static name resolution -- see above")

@@ -12,11 +12,26 @@ code that was scored:
 cd "Round 3"
 ./.venv/bin/python -m src.export_notebook --models lgbm,xgb,cb,mtnn,cnn \
     --out submissions/final.ipynb
+./.venv/bin/python scripts/lint_notebook.py submissions/final.ipynb   # seconds
 ./.venv/bin/python scripts/execute_notebook.py submissions/final.ipynb
 ./.venv/bin/python -m src.check_submission /tmp/nbrun/submission.csv
 ```
 
 Edit `src/`, then re-export. Never patch the .ipynb by hand.
+
+
+## The lint step is not optional
+
+`src/export_notebook.py` inlines every module into one namespace and drops the
+intra-package imports. A function body that still says `trees.make(...)` parses
+perfectly and raises `NameError` only when that line runs. Exactly that shipped
+in `final.ipynb` and cost a 542-second run to find; `ast.parse` on each cell --
+which this checklist used to rely on -- cannot see it.
+
+`scripts/lint_notebook.py` resolves every global with `symtable` in about a
+second. The export now runs it automatically and refuses to write a notebook that
+fails. Use `--allow NAME1,NAME2` only for names read inside a runtime-guarded
+branch (e.g. GNN internals in an export without `gnn`).
 
 ## What the generator has to handle
 
@@ -85,13 +100,16 @@ cc=[''.join(c['source']) for c in nb['cells'] if c['cell_type']=='code']; \
 w=chr(10).join(cc); \
 print({b:w.count(b) for b in ['torch.load','pickle.load','np.load(','MAX_HOURS','from_pretrained','torch.hub','from src'] if w.count(b)} or 'clean')"
 
-# 2. it actually runs, and writes a submission
+# 2. every global resolves -- catches a stripped import in seconds, not 542s
+./.venv/bin/python scripts/lint_notebook.py submissions/final.ipynb
+
+# 3. it actually runs, and writes a submission
 ./.venv/bin/python scripts/execute_notebook.py submissions/final.ipynb
 
-# 3. the submission is valid
+# 4. the submission is valid
 ./.venv/bin/python -m src.check_submission /tmp/nbrun/submission.csv
 
-# 4. the notebook's own asserts passed (invariance certificate + compliance audit)
+# 5. the notebook's own asserts passed (invariance certificate + compliance audit)
 ```
 
 The notebook carries two `assert`s on purpose: permutational invariance must be

@@ -377,8 +377,9 @@ def partner_frame(train_df, all_canon, universe_by_target):
     legitimately out-of-sample for them.
     """
     idx = {c: i for i, c in enumerate(all_canon)}
-    true_w = train_df.pivot_table(index="canon", columns="target_type",
-                                  values="target", aggfunc="mean")
+    from src.partners import label_pool
+    true_w = label_pool(train_df).pivot_table(
+        index="canon", columns="target_type", values="target", aggfunc="mean")
     out = pd.DataFrame(index=all_canon)
     is_true = pd.DataFrame(index=all_canon)
     for t in TARGETS:
@@ -471,7 +472,7 @@ def ionic_term(train_df, X_tr, all_canon, X_all, fold_id, seed=SEED, verbose=Tru
     model that never saw fold k's eps rows; `full` is fitted on all of them and
     is what the test side uses.
     """
-    from src.models import trees
+    from src.models.trees import make
 
     w = train_df.pivot_table(index="canon", columns="target_type",
                              values="target", aggfunc="mean")
@@ -499,10 +500,10 @@ def ionic_term(train_df, X_tr, all_canon, X_all, fold_id, seed=SEED, verbose=Tru
         tr_m = f_ion != k
         if tr_m.sum() < 30:
             continue
-        m = trees.make("lgbm", "eps", int(tr_m.sum()), seed)
+        m = make("lgbm", "eps", int(tr_m.sum()), seed)
         m.fit(Xi[tr_m], ion[tr_m])
         per_fold[int(k)] = m.predict(X_all)
-    full_m = trees.make("lgbm", "eps", len(ion), seed)
+    full_m = make("lgbm", "eps", len(ion), seed)
     full_m.fit(Xi, ion)
     full = full_m.predict(X_all)
     if verbose:

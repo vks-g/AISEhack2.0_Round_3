@@ -34,6 +34,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-02 | **v4 base: periodic GNN** (10 folds, 80 ep, 1 seed) | 42 | **0.8805** | 0.899 | 0.883 | 0.911 | 0.796 | 0.902 | 0.861 | 0.912 | — | 15587s | **best single model**; polyGNN-style periodic graph |
 | 2026-09-02 | **v4 FULL: 5 models → stack → 2-pass shrunk physics → partner regression** | 42 | **0.9109** | 0.9178 | 0.9228 | 0.9434 | 0.8531 | 0.9118 | 0.8897 | 0.9378 | — | — | **SHIPPED** (`submissions/final.ipynb`) |
 | 2026-09-02 | **+ eps = n² + ionic decomposition** | 42 | **0.9162** | 0.9178 | 0.9228 | 0.9434 | 0.8742 | 0.9276 | 0.8897 | 0.9378 | — | — | **SHIPPED**; eps +0.021, nc +0.016 |
+| 2026-09-02 | **+ Round-2 archive** (host-sanctioned tg/egc labels) | 42 | *(see below)* | — | — | — | — | — | — | — | — | — | **SHIPPED**. TWO separate gains: a **measured CV gain** of **+0.0149** on 3-fold lgbm from wider `true_egc` (egb +0.020, eps +0.051, nc +0.021, ei +0.011; tg +0.0004 and egc +0.0000, exactly as drop_leaky predicts), and a **test-only override** worth est. **+0.0136** that CV cannot see |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -73,6 +74,101 @@ expected mean-R² gain per hour:
 Not worth doing with two days left: repeat-unit canonicalisation (the data has no
 oligomer duplicates — see the invariance section of CLAUDE.md), and anything that
 pushes the notebook past a single Kaggle session.
+
+## The Round-2 archive (host-sanctioned)
+
+`data/base_line_model.ipynb` — the baseline shipped *with* this competition —
+fetches from two Google Drive IDs that still point at the Round-2 release. **They
+are swapped relative to their `-O` names** *(measured)*: `1ZYfvPAt` serves an
+unlabelled file (4115 rows, no `target`), `1QU-Fyff` the labelled one (6171 rows,
+`tg` + `egc` only).
+
+Measured against Round 3 *(src/archive.py, `report()`)*:
+
+| archive labelled rows | 6171 (6165 after canonical dedupe) |
+|---|---|
+| already in `train.csv` | 3719 |
+| are `test.csv` rows | 2450 (2448 not already in train) |
+| **genuinely new training rows** | **0** |
+
+Values are identical where it overlaps `train.csv` on **3717 of 3719** shared
+labels, so these are the same measurements, not a second dataset. The two
+disagreements are both `tg` and small (262.00 vs 274.0, 133.09 vs 135.0) --
+Round-2/Round-3 revisions. At 0.05% they are negligible against the model's own
+error on the rows the override replaces. The hosts were asked directly
+and confirmed the file is in scope; `submissions/round3_final.ipynb` records the
+same confirmation and uses it the same two ways `src/archive.py` does:
+
+1. **Extra partner labels** — `true_egc` test coverage 15.3% → 38.1%, feeding
+   `egb`/`ei`/`eea` through `physics.RELATIONS` and the partner regression.
+2. **A direct override** on the 2448 test rows it labels, applied last so a
+   measured value is never clipped or perturbed downstream.
+
+**CV DOES move: +0.0149 measured** (3-fold lgbm, 0.8514 -> 0.8663). The first
+prediction written here -- "CV cannot move" -- was WRONG, and the reason is worth
+keeping. The archive supplies `true_egc` for polymers whose own `egc` row sits in
+the *held-out* fold, which no training fold could otherwise see. That is not a
+leak of the scored label: `tg` moved +0.0004 and `egc` +0.0000, exactly as
+`drop_leaky()` guarantees, while the gain lands entirely on the five targets that
+consume `egc` as a SOURCE -- egb +0.0202, eps +0.0508, nc +0.0209, ei +0.0110.
+
+Is that CV gain optimistic? **No -- it is conservative.** `true_egc` coverage:
+
+| target | CV no-arch | CV +arch | TEST no-arch | TEST +arch |
+|---|---|---|---|---|
+| egb | 35.9% | 73.0% | 55.4% | **76.3%** |
+| eps | 33.6% | 65.9% | 54.2% | **76.5%** |
+| nc  | 34.9% | 65.9% | 47.7% | **73.9%** |
+| ei  | 33.3% | 68.5% | 54.7% | **77.7%** |
+| eea | 33.0% | 71.0% | 51.7% | **74.8%** |
+
+Test coverage exceeds CV coverage for all five targets with the archive present
+(73.9-77.7% vs 65.9-73.0%), so the CV number understates what test rows get. The
+same relationship already held without the archive.
+
+The 0.9162 full-pipeline CV is NOT simply +0.0149 -- physics and the partner
+regression already exploit `egc` heavily, so the marginal gain on the full stack
+is smaller than on bare lgbm. The override's ~+0.0136 is additive and test-only.
+
+Safety: archive labels cover `tg` and `egc` only. `tg` is not in `DFT_PROPS`, so
+the sole feature effect is wider `true_egc`. `partners.drop_leaky()` still removes
+`true_{target}` for the row being predicted, `apply_physics` masks the target's
+own partner column per fold, and `partner_regression` excludes it from the design
+matrix — so an archive label can only ever enter as a SOURCE property.
+`assert_no_leak()` passes with the archive registered *(verified)*.
+
+`archive.ARCHIVE_PROPS = {"tg","egc"}` is the discriminator that stops an attached
+copy of Round-3 `train.csv` (also a valid three-column label table, but spanning
+all seven properties) being adopted as "the archive" and silently doing nothing.
+
+`USE_ARCHIVE = False` in the notebook reproduces the archive-free pipeline exactly.
+
+## Export bugs caught 2026-09-02 (the notebook would have died on Kaggle)
+
+Two, both found by end-to-end execution, then made un-repeatable by
+`scripts/lint_notebook.py`, which `src/export_notebook.py` now runs as a gate.
+
+1. **`ionic_term` referenced `trees.make`.** `src/oof.py` did
+   `from src.models import trees` inside the function; the inliner strips every
+   intra-package import, so the notebook had `trees.make(...)` with no `trees`.
+   It parses, so nothing caught it until it executed -- **542 s into the run**,
+   after both base models and the stack. The shipped `submissions/final.ipynb`
+   carried this from the moment the ionic decomposition was added, so the eps=n²
+   result was never actually exercised in a notebook. Fixed by importing `make`
+   directly, which is the name the inlined `models/trees.py` binds.
+
+2. **The graph readout ablation referenced GNN internals unconditionally**, so
+   any export whose `--models` omitted `gnn` crashed in the invariance cell.
+   Now guarded by `if "gnn" not in MODELS`.
+
+`scripts/lint_notebook.py` walks every cell with `symtable`, accumulates what each
+binds, and reports any global a later cell reads that nothing bound. It was
+verified against the real bug (re-injecting `trees.make` makes it exit 1 naming
+`trees` in the right cell) rather than merely passing on the fixed file. Runtime-
+guarded branches need `--allow`, since static analysis cannot see the guard.
+
+**Lesson: `ast.parse` on every cell proves nothing about names.** The export had
+been "verified" that way for several sessions.
 
 ## Decisions / dead ends
 

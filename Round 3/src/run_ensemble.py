@@ -20,6 +20,8 @@ from src import oof as O
 from src.data import load_test, load_train
 from src.features import featurize
 from src.metric import TARGETS, competition_score
+from src import archive as ARCH
+from src import partners as P
 from src.paths import REPO
 
 TREE_KINDS = {"lgbm", "xgb", "cb"}
@@ -29,11 +31,20 @@ GLOBAL_MODELS = {"mtnn", "cnn", "gnn"}
 
 def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
          use_cache=True, verbose=True, scheme='per_property', use_partners=True,
-         use_physics_feature=True, use_partner_ridge=True):
+         use_physics_feature=True, use_partner_ridge=True, use_archive=True):
     t0 = time.time()
     train, test = load_train(), load_test()
     all_canon = list(dict.fromkeys(list(train["canon"]) + list(test["canon"])))
     print(f"train {len(train)}  test {len(test)}  universe {len(all_canon)} polymers")
+
+    # Host-sanctioned Round-2 archive: extra tg/egc labels (src/archive.py).
+    # Registered globally so every partner build sees the same table; every
+    # archive row is either already in train or is a test row, so this cannot
+    # move CV -- the whole effect is on the test side.
+    arch, arch_ok, arch_src = ARCH.load(use_archive=use_archive)
+    if arch_ok:
+        ARCH.report(arch, train, test)
+    P.set_archive(arch if arch_ok else None)
 
     X_tr = featurize(train["canon"])
     X_te = featurize(test["canon"])
@@ -164,8 +175,13 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
                 m = (test["target_type"] == t).values & bad
                 if m.any():
                     final[m] = float(train.loc[train.target_type == t, "target"].mean())
+        # Archive override LAST, so a measured value is never clipped or
+        # perturbed by a downstream stage.
+        if arch_ok:
+            final, _ov = ARCH.override(test, final, arch)
         pd.DataFrame({"id": test["id"].values, "target": final}).to_csv(out, index=False)
-        print(f"wrote {out}  ({len(test)} rows)")
+        print(f"wrote {out}  ({len(test)} rows)"
+              + (f"  [{len(_ov)} archive-overridden]" if arch_ok else ""))
 
     return {"mean_r2": score, "per_target": per, "oof": ph_oof, "test": ph_test,
             "physics": info, "stack_alphas": alphas, "stack_only": score_stack}
@@ -182,10 +198,12 @@ if __name__ == "__main__":
     p.add_argument("--scheme", default="per_property", choices=["per_property", "grouped"])
     p.add_argument("--no-partners", action="store_true")
     p.add_argument("--no-physics-feature", action="store_true")
+    p.add_argument("--no-archive", action="store_true")
     a = p.parse_args()
     main([m.strip() for m in a.models.split(",") if m.strip()],
          n_folds=a.folds, seed=a.seed,
          nn_seeds=tuple(int(s) for s in a.nn_seeds.split(",")),
          out=a.out, use_cache=not a.no_cache, scheme=a.scheme,
          use_partners=not a.no_partners,
-         use_physics_feature=not a.no_physics_feature)
+         use_physics_feature=not a.no_physics_feature,
+         use_archive=not a.no_archive)

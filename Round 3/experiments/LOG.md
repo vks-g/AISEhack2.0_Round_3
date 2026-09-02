@@ -122,6 +122,33 @@ Record what did NOT work here so no session retries it.
   four decimals. Kept because it is the correct construction, not because it
   helps. A base-model gain that survives the stack is the exception, not the
   rule: the stack is already correcting much of what it fixes.
+- **Repeat-unit (dimer) augmentation is the biggest accuracy lever we had missed.**
+  `*CC*` and `*CCCC*` are the same polymer with the same property value, so the
+  dimer of a training row is a new view of a known label. Augmented rows enter
+  TRAINING folds only. Measured on lgbm, 10 folds:
+
+      eps 0.7882 -> 0.8230  (+0.0349)      ei  0.8115 -> 0.8196  (+0.0081)
+      nc  0.8607 -> 0.8672  (+0.0065)      eea 0.8769 -> 0.8788  (+0.0019)
+      egb 0.9042 -> 0.9061  (+0.0019)
+      mean over the 5 small targets +0.0106  =  +0.0076 on the 7-target mean
+
+  I had explicitly dismissed this. I measured that the data contains no oligomer
+  duplicates and concluded invariance was "a rubric deliverable, not points".
+  That was right about DEduplication and missed the inverse entirely: you can
+  CREATE the variants as training data. Same polymer, same label, different
+  features, free rows exactly where the labels are scarce.
+- **Intensive features are a repetition-invariance choice, not just more columns.**
+  Fraction of feature values unchanged when a repeat unit is dimerised:
+  element fractions 100%, side-chain ratio 100%, intensive twins 87.6%, against
+  62.8% for raw RDKit descriptors. MolWt and HeavyAtomCount double exactly
+  (ratio 2.000) as the control. Extensive quantities scale with the unit count;
+  intensive ones do not.
+- **The graph readout IS the invariance guarantee.** On an untrained periodic-graph
+  net, prediction deviation under dimerisation: mean/max readout ~1e-4 median,
+  sum readout ~0.7 -- four orders of magnitude. Atom-ordering invariance is EXACT
+  (0.00e+00) for both. Note this is measured NEAR-invariance for repeat count, not
+  a proof: ~97% of polymers give structurally identical node-environment
+  distributions, and the residual 3% are genuine mismatches. Do not overclaim it.
 - **We refit on 100% of the data for test predictions; they average the fold
   models. That was the structural bug.** `per_property_oof` trained K fold models
   to produce the OOF, threw them away, then fit ONE fresh model on all rows for

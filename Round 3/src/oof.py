@@ -39,6 +39,7 @@ from src.splits import grouped_folds
 
 N_FOLDS = 10
 SEED = 42
+AUG_MAX_N = 400        # only targets smaller than this get repeat-unit augmentation
 STACK_ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0]
 
 
@@ -142,7 +143,7 @@ def physics_feature_cols(target, block, raw_only=False):
 def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
                      fold_id, all_canon, X_all, seed=SEED, n_jobs=None,
                      use_partners=True, use_physics_feature=True,
-                     use_partner_ridge=True):
+                     use_partner_ridge=True, use_augment=True, aug_max_n=AUG_MAX_N):
     """OOF + test + whole-universe predictions for one per-property estimator.
 
     Test and universe predictions are the AVERAGE OF THE K FOLD MODELS, not a
@@ -181,6 +182,22 @@ def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
         f = fold_id[rows]
         te = np.where((test_df["target_type"] == t).values)[0]
 
+        # REPEAT-UNIT AUGMENTATION. `*CC*` and `*CCCC*` are the same polymer and
+        # carry the same property value, so the dimer of a training row is a
+        # genuinely new view of a known label -- free data exactly where we are
+        # starved. Only the small targets get it: they are 5/7 of the metric on
+        # under 5% of the rows, and augmenting tg/egc would double the most
+        # expensive training for nothing. Augmented rows enter TRAINING FOLDS
+        # ONLY, so no fold is ever scored on a row derived from its own
+        # validation data. Measured on eps with lgbm: 0.7882 -> 0.8230.
+        X_aug = None
+        if use_augment and len(rows) < aug_max_n:
+            from src.smiles_utils import build_oligomer, canonicalize
+            dimers = [canonicalize(build_oligomer(c, 2))
+                      for c in train_df["canon"].values[rows]]
+            X_aug = featurize(dimers)
+        pos_of_row = {r: i for i, r in enumerate(rows)}
+
         if use_partners:
             (bte, buni), _ = P.build(train_df, [test_df, uni_df])
             kte = P.drop_leaky(bte.iloc[te], t)
@@ -195,13 +212,14 @@ def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
             if len(tr) < 5:
                 continue
 
+            extra_a = []          # engineered columns appended to the design
             if use_partners:
                 keep = np.ones(len(train_df), dtype=bool)
                 keep[va] = False
                 (btr, bva), _ = P.build(train_df[keep],
                                         [train_df.iloc[tr], train_df.iloc[va]])
                 ktr, kva = P.drop_leaky(btr, t), P.drop_leaky(bva, t)
-                Xa = np.hstack([X_tr[tr], ktr.values])
+                extra_a.append(ktr.values)
                 Xb = np.hstack([X_tr[va], kva.values])
                 Xt = np.hstack([X_te[te], kte.values])
                 Xu = np.hstack([X_all, kuni.values])
@@ -211,37 +229,43 @@ def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
                     Zva = np.nan_to_num(kva.values.astype(np.float64))
                     if len(Ztr) >= 30 and Ztr.shape[1]:
                         mdl = RidgeCV(alphas=_ALPHAS).fit(Ztr, y_all[tr])
-                        # out-of-fold for the training rows: an in-sample fit is
-                        # unrealistically accurate on the rows it was fitted to,
-                        # so the tree would over-trust a weaker column at inference
                         inner = np.zeros(len(tr))
                         for ia, ib in _KF(5, shuffle=True, random_state=0).split(Ztr):
                             inner[ib] = RidgeCV(alphas=_ALPHAS).fit(
                                 Ztr[ia], y_all[tr][ia]).predict(Ztr[ib])
-                        Xa = np.hstack([Xa, inner.reshape(-1, 1)])
+                        extra_a.append(inner.reshape(-1, 1))
                         Xb = np.hstack([Xb, mdl.predict(Zva).reshape(-1, 1)])
                         Xt = np.hstack([Xt, mdl.predict(Zte).reshape(-1, 1)])
                         Xu = np.hstack([Xu, mdl.predict(Zuni).reshape(-1, 1)])
 
                 if use_physics_feature:
-                    ra, ha = physics_feature_cols(t, ktr)
+                    ra, ha_ = physics_feature_cols(t, ktr)
                     rb, hb = physics_feature_cols(t, kva)
                     rt, ht = physics_feature_cols(t, kte)
                     ru, hu = physics_feature_cols(t, kuni)
                     if ra is not None:
-                        ok = np.isfinite(ra) & ha
+                        ok = np.isfinite(ra) & ha_
                         if ok.sum() >= 15 and np.std(ra[ok]) > 1e-12:
                             a_, b_ = np.polyfit(ra[ok], y_all[tr][ok], 1)
-                            Xa = np.hstack([Xa, np.column_stack([a_ * ra + b_, ha.astype(np.float32)])])
+                            extra_a.append(np.column_stack([a_ * ra + b_,
+                                                            ha_.astype(np.float32)]))
                             Xb = np.hstack([Xb, np.column_stack([a_ * rb + b_, hb.astype(np.float32)])])
                             Xt = np.hstack([Xt, np.column_stack([a_ * rt + b_, ht.astype(np.float32)])])
                             Xu = np.hstack([Xu, np.column_stack([a_ * ru + b_, hu.astype(np.float32)])])
+                Xa = np.hstack([X_tr[tr]] + extra_a)
             else:
                 Xa, Xb = X_tr[tr], X_tr[va]
                 Xt, Xu = X_te[te], X_all
 
-            m = kind_maker(kind, t, len(tr), seed)
-            m.fit(Xa, y_all[tr])
+            ya = y_all[tr]
+            if X_aug is not None:
+                # same molecule -> identical engineered columns, dimer structure
+                tr_pos = [pos_of_row[r] for r in tr]
+                Xa = np.vstack([Xa, np.hstack([X_aug[tr_pos]] + extra_a)])
+                ya = np.concatenate([ya, y_all[tr]])
+
+            m = kind_maker(kind, t, len(ya), seed)
+            m.fit(Xa, ya)
             oof[va] = m.predict(Xb)
             fold_test.append(m.predict(Xt))
             fold_uni.append(m.predict(Xu))

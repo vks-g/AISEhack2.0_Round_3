@@ -30,7 +30,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import Descriptors, MACCSkeys, rdFingerprintGenerator
+from rdkit.Chem import AllChem, Descriptors, MACCSkeys, rdFingerprintGenerator
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -53,13 +53,42 @@ GROUP_SMARTS = {
     "halide_F": "[F]", "halide_Cl": "[Cl]", "halide_Br": "[Br]", "halide_I": "[I]",
     "siloxane": "[Si][OX2][Si]", "phosphate": "[PX4](=[OX1])",
     "alkene": "[CX3]=[CX3]", "alkyne": "[CX2]#[CX2]",
+    "anhydride": "[CX3](=[OX1])[OX2][CX3](=[OX1])",
+    "carbonate": "[OX2][CX3](=[OX1])[OX2]",
+    "thioether_ar": "[c][SX2][c]", "sulfone_ar": "[c][SX4](=O)(=O)[c]",
+    "biphenyl": "[c]1[c][c][c]([c][c]1)-[c]1[c][c][c][c][c]1",
+    "fused_ring": "[R2]", "quaternary_C": "[CX4]([#6])([#6])([#6])[#6]",
+    "ether_ar": "[c][OX2][#6]", "amide_ar": "[c][NX3][CX3]=[OX1]",
+    "cf3": "[CX4](F)(F)F", "nitrile_ar": "[c][CX2]#[NX1]",
 }
 _GROUP_PATTERNS = [(k, Chem.MolFromSmarts(v)) for k, v in GROUP_SMARTS.items()]
 
 POLYMER_TERMS = [
     "backbone_len", "heavy_atoms", "aromatic_atoms", "n_rings", "n_hetero",
     "aromatic_ratio", "hetero_ratio", "backbone_ratio",
+    # backbone / side-chain decomposition. The backbone is the shortest path
+    # between the two attachment points; everything hanging off it is side chain.
+    # Backbone stiffness against side-chain bulk is the textbook driver of the
+    # glass transition, and no whole-molecule descriptor expresses it.
+    "sidechain_atoms", "sidechain_ratio", "max_sidechain_len", "n_branches",
+    "backbone_rings", "backbone_rot", "backbone_arom", "backbone_hetero",
 ]
+
+# Elements worth counting separately in this chemistry.
+ELEMENTS = [6, 7, 8, 9, 14, 15, 16, 17, 35, 53]
+
+# Extensive RDKit descriptors get an INTENSIVE twin (value per heavy atom).
+# This is a repetition-invariance choice as much as a chemical one: an extensive
+# quantity DOUBLES when a repeat unit is written as its dimer, an intensive one
+# does not. Adding the intensive twin gives the fingerprint models a view of the
+# molecule that does not move under the rewriting the host asked about.
+INTENSIVE_OF = [
+    "MolWt", "HeavyAtomCount", "NumRotatableBonds", "NumHAcceptors",
+    "NumHDonors", "RingCount", "NumAromaticRings", "TPSA", "LabuteASA",
+    "MolMR", "NumValenceElectrons", "NHOHCount", "NOCount", "MolLogP",
+]
+
+CHARGE_TERMS = ["q_min", "q_max", "q_mean", "q_absmean", "q_std", "q_range"]
 
 
 def feature_names() -> list[str]:
@@ -72,6 +101,9 @@ def feature_names() -> list[str]:
         + [f"mac_{i}" for i in range(167)]
         + [f"po_{n}" for n in POLYMER_TERMS]
         + [f"grp_{k}" for k in GROUP_SMARTS]
+        + [f"el_n{z}" for z in ELEMENTS] + [f"el_f{z}" for z in ELEMENTS]
+        + [f"iv_{n}" for n in INTENSIVE_OF]
+        + [f"chg_{n}" for n in CHARGE_TERMS]
     )
 
 
@@ -110,24 +142,90 @@ def featurize_one(smi: str) -> np.ndarray:
     parts.append(mac)
 
     stars = [a.GetIdx() for a in m.GetAtoms() if a.GetAtomicNum() == 0]
-    backbone = -1.0
-    if len(stars) == 2:
-        try:
-            backbone = float(len(Chem.GetShortestPath(m, stars[0], stars[1])) - 2)
-        except Exception:
-            backbone = -1.0
     ha = m.GetNumHeavyAtoms()
     arom = sum(1 for a in m.GetAtoms() if a.GetIsAromatic())
     rings = m.GetRingInfo().NumRings()
     het = sum(1 for a in m.GetAtoms() if a.GetAtomicNum() not in (1, 6, 0))
+
+    backbone = -1.0
+    bb_path: tuple = ()
+    if len(stars) == 2:
+        try:
+            bb_path = Chem.GetShortestPath(m, stars[0], stars[1])
+            backbone = float(len(bb_path) - 2)
+        except Exception:
+            bb_path, backbone = (), -1.0
+
+    bb = set(bb_path) - set(stars)
+    side = [a.GetIdx() for a in m.GetAtoms()
+            if a.GetAtomicNum() != 0 and a.GetIdx() not in bb]
+    n_side = float(len(side))
+    # longest side chain = deepest excursion off the backbone
+    max_side = 0.0
+    n_branch = 0.0
+    if bb:
+        seen = set(bb)
+        for b_ in bb:
+            for nb_ in m.GetAtomWithIdx(b_).GetNeighbors():
+                if nb_.GetIdx() in bb or nb_.GetAtomicNum() == 0:
+                    continue
+                n_branch += 1.0
+                depth, frontier = 0, [nb_.GetIdx()]
+                local = set(seen)
+                while frontier and depth < 30:
+                    depth += 1
+                    nxt = []
+                    for u in frontier:
+                        local.add(u)
+                        for w in m.GetAtomWithIdx(u).GetNeighbors():
+                            if w.GetIdx() not in local and w.GetAtomicNum() != 0:
+                                nxt.append(w.GetIdx())
+                    frontier = nxt
+                max_side = max(max_side, float(depth))
+    bb_rings = float(sum(1 for i in bb if m.GetAtomWithIdx(i).IsInRing()))
+    bb_arom = float(sum(1 for i in bb if m.GetAtomWithIdx(i).GetIsAromatic()))
+    bb_het = float(sum(1 for i in bb
+                       if m.GetAtomWithIdx(i).GetAtomicNum() not in (1, 6, 0)))
+    bb_rot = 0.0
+    for b_ in m.GetBonds():
+        i, j = b_.GetBeginAtomIdx(), b_.GetEndAtomIdx()
+        if i in bb and j in bb and b_.GetBondType() == Chem.BondType.SINGLE \
+                and not b_.IsInRing():
+            bb_rot += 1.0
+
     parts.append(np.array([
         backbone, ha, arom, rings, het,
         arom / max(ha, 1), het / max(ha, 1), backbone / max(ha, 1),
+        n_side, n_side / max(ha, 1), max_side, n_branch,
+        bb_rings, bb_rot, bb_arom, bb_het,
     ], dtype=np.float32))
 
     parts.append(np.array(
         [len(m.GetSubstructMatches(p)) if p is not None else 0 for _, p in _GROUP_PATTERNS],
         dtype=np.float32))
+
+    counts = {z: 0 for z in ELEMENTS}
+    for a in m.GetAtoms():
+        if a.GetAtomicNum() in counts:
+            counts[a.GetAtomicNum()] += 1
+    parts.append(np.array([counts[z] for z in ELEMENTS], dtype=np.float32))
+    parts.append(np.array([counts[z] / max(ha, 1) for z in ELEMENTS], dtype=np.float32))
+
+    # intensive twins -- unchanged when the repeat unit is written as its dimer
+    parts.append(np.array([float(d.get(n, 0.0)) / max(ha, 1) for n in INTENSIVE_OF],
+                          dtype=np.float32))
+
+    try:
+        mc = Chem.Mol(m)
+        AllChem.ComputeGasteigerCharges(mc)
+        q = np.array([float(a.GetDoubleProp("_GasteigerCharge"))
+                      for a in mc.GetAtoms()], dtype=np.float64)
+        q = q[np.isfinite(q)]
+        chg = ([q.min(), q.max(), q.mean(), np.abs(q).mean(), q.std(),
+                q.max() - q.min()] if q.size else [0.0] * 6)
+    except Exception:
+        chg = [0.0] * 6
+    parts.append(np.array(chg, dtype=np.float32))
 
     v = np.concatenate(parts)
     return np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

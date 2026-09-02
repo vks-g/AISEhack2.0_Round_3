@@ -24,7 +24,7 @@ from src.paths import REPO
 
 TREE_KINDS = {"lgbm", "xgb", "cb"}
 SIMPLE_KINDS = {"knn", "et", "ridge"}
-GLOBAL_MODELS = {"mtnn", "cnn"}
+GLOBAL_MODELS = {"mtnn", "cnn", "gnn"}
 
 
 def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
@@ -46,7 +46,7 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
     base_oof, base_test, tree_universe = {}, {}, {}
 
     for name in models:
-        key = f"{name}_f{n_folds}_s{seed}_{scheme}_p{int(use_partners)}_pf{int(use_physics_feature)}_pr{int(use_partner_ridge)}v3"
+        key = f"{name}_f{n_folds}_s{seed}_{scheme}_p{int(use_partners)}_pf{int(use_physics_feature)}_pr{int(use_partner_ridge)}v4"
         hit = O.cache_get(key) if use_cache else None
         if hit is not None:
             base_oof[name], base_test[name] = hit["oof"], hit["test"]
@@ -82,6 +82,11 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
             o, te = cnn.oof_and_test(train, test, fold_id, list(nn_seeds))
             if use_cache:
                 O.cache_put(key, oof=o, test=te)
+        elif name == "gnn":
+            from src.models import gnn
+            o, te = gnn.oof_and_test(train, test, fold_id, list(nn_seeds))
+            if use_cache:
+                O.cache_put(key, oof=o, test=te)
         else:
             raise ValueError(f"unknown model {name}")
 
@@ -114,7 +119,7 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
     # property -- including the one we are about to predict from it. That closes
     # a one-hop cycle and inflated OOF by +0.008 (0.9097 -> 0.9014 once removed)
     # while contributing nothing on test, where no such labels exist.
-    ck = f"cleanuni_f{n_folds}_s{seed}v3"
+    ck = f"cleanuni_f{n_folds}_s{seed}v4"
     hit = O.cache_get(ck) if use_cache else None
     if hit is not None:
         uni = hit["universe"]

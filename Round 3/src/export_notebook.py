@@ -351,6 +351,23 @@ def build(models, out_path, physics_stage=True):
                         "`y` is standardised **per target** inside each fold — without that, `tg` "
                         "(range 495) dominates a shared loss and `nc` (range 2.76) learns nothing."))
         cells.append(code(strip("models/mtnn.py", {"oof_and_test": "mtnn_oof_and_test", "NAME": "_NAME_MTNN"})))
+    if "gnn" in models:
+        cells.append(md("### Periodic multitask graph network (polyGNN-style)\n\n"
+                        "Follows polyGNN (Gurnani, Kuenneth, Toland & Ramprasad, *Chem. Mater.* "
+                        "2023), the published state of the art for this dataset family; the seven "
+                        "targets here come from Kuenneth et al., *Patterns* 2021.\n\n"
+                        "A repeat unit is not a molecule with two dangling stubs -- the two `*` "
+                        "points are the SAME bond to the neighbouring unit. Removing the dummies "
+                        "and bonding their neighbours gives a **periodic** graph that encodes an "
+                        "infinite chain, so where the unit was cut stops being a property of the "
+                        "input. It also reads the graph rather than a hashed fingerprint, which "
+                        "is what makes its errors decorrelate from every other model here."))
+        cells.append(code(strip("models/gnn.py", {"oof_and_test": "gnn_oof_and_test",
+                                                  "NAME": "_NAME_GNN", "HP": "GNN_HP",
+                                                  "_Net": "_GNet", "_MP": "_GMP",
+                                                  "_collate": "_gcollate",
+                                                  "_collapse": "_gcollapse",
+                                                  "_train_one": "_gtrain_one"})))
     if "cnn" in models:
         cells.append(md("### SMILES 1-D CNN\n\n"
                         "Reads the canonical SMILES string directly, so its errors decorrelate "
@@ -389,6 +406,9 @@ def build(models, out_path, physics_stage=True):
     if "cnn" in models:
         branches.append('    elif name == "cnn":\n'
                         '        o, te = cnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)')
+    if "gnn" in models:
+        branches.append('    elif name == "gnn":\n'
+                        '        o, te = gnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)')
     run = (RUN_CELL.replace("__PHYSICS__", "True" if physics_stage else "False")
                    .replace("__MODELS__", repr(list(models)))
                    .replace("__MODEL_BRANCHES__", "\n".join(branches) if branches else "    # (no neural models in this build)"))

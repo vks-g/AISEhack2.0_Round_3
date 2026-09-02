@@ -53,9 +53,11 @@ HP = dict(
     dropout=0.10,
     lr=1.5e-3,
     weight_decay=1e-5,
-    epochs=80,           # the MEASURED setting (0.8805 @ 10 folds/80 ep/1 seed).
-                         # 110 was never validated and 2 seeds x 110 spans
-                         # 6.7-9.6 h on a Kaggle T4 -- the top end loses the run.
+    epochs=110,          # matches the 0.916-LB notebook's MPNN, which uses the
+                         # SAME hidden(160)/layers(4)/lr(1.5e-3)/batch(128) and no
+                         # early stopping. Our 0.8805 was measured at 80; their
+                         # honest single-seed number at 110 is ~0.8996. Real T4
+                         # timing (135 s/fold) makes 110 affordable.
     batch_size=128,
     warmup_frac=0.05,
     final_lr_frac=0.05,

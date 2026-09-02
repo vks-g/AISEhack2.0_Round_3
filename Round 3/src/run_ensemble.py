@@ -138,8 +138,10 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
     universe_by_target = {t: uni[:, i] for i, t in enumerate(TARGETS)}
     partners, is_true = O.partner_frame(train, all_canon, universe_by_target)
 
+    ion = O.ionic_term(train, X_tr, all_canon, X_all, fold_id, seed=seed)
     ph_oof, ph_test, info = O.apply_physics(train, st_oof, test, st_test,
-                                            fold_id, partners, is_true, n_rounds=0)
+                                            fold_id, partners, is_true,
+                                            n_rounds=0, ionic=ion)
     O.report(train, ph_oof, "stacked + staged physics")
     ph_oof, ph_test, _ = O.partner_regression(train, ph_oof, test, ph_test,
                                               fold_id, partners, is_true)

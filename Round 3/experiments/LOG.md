@@ -33,6 +33,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-02 | v4 base: mtnn 3-seed | 42 | 0.8734 | 0.891 | 0.875 | 0.927 | 0.799 | 0.891 | 0.849 | 0.881 | — | 4577s | |
 | 2026-09-02 | **v4 base: periodic GNN** (10 folds, 80 ep, 1 seed) | 42 | **0.8805** | 0.899 | 0.883 | 0.911 | 0.796 | 0.902 | 0.861 | 0.912 | — | 15587s | **best single model**; polyGNN-style periodic graph |
 | 2026-09-02 | **v4 FULL: 5 models → stack → 2-pass shrunk physics → partner regression** | 42 | **0.9109** | 0.9178 | 0.9228 | 0.9434 | 0.8531 | 0.9118 | 0.8897 | 0.9378 | — | — | **SHIPPED** (`submissions/final.ipynb`) |
+| 2026-09-02 | **+ eps = n² + ionic decomposition** | 42 | **0.9162** | 0.9178 | 0.9228 | 0.9434 | 0.8742 | 0.9276 | 0.8897 | 0.9378 | — | — | **SHIPPED**; eps +0.021, nc +0.016 |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -127,6 +128,31 @@ Record what did NOT work here so no session retries it.
   four decimals. Kept because it is the correct construction, not because it
   helps. A base-model gain that survives the stack is the exception, not the
   rule: the stack is already correcting much of what it fixes.
+- **eps = n² + ε_ion is an exact DFPT decomposition, not a fitted residual, and
+  it is the largest physics gain in the pipeline.** The static dielectric
+  constant is computed as an electronic part plus an ionic part; the electronic
+  part IS n² by Maxwell's relation. So `eps - nc²` is the ionic contribution --
+  a physical quantity with its own structure-property relationship.
+
+  Two independent checks that this is real rather than convenient:
+    * `eps - nc²` is POSITIVE for all 134 co-observed polymers (min +0.024).
+      A generic empirical residual would cross zero; an ionic contribution cannot
+      be negative.
+    * our own affine fit had already converged on a=1.040, b=0.615 -- a is 1.0
+      and b is the mean ionic term (0.767). It was rediscovering the
+      decomposition blindly, with the ionic part pinned to a single constant.
+
+  Naming it correctly makes the constant PREDICTABLE. On the covered eps rows:
+      direct eps model                  0.7129
+      nc² + constant ionic              0.8514   <- what a global affine gives
+      nc² + structure-predicted ionic   0.9573
+  The ionic term itself models at R² 0.708. End to end: 0.9109 → 0.9162, with
+  eps 0.8531 → 0.8742 and nc 0.9118 → 0.9276 (the inverse relation benefits too).
+
+  Credit where due: this came from a teammate's analysis of the source papers.
+  The lesson for this repo is that reading where the DATA came from paid more
+  than any amount of further tuning -- the same fit, correctly named, went from
+  a constant to a model.
 - **Repeat-unit (dimer) augmentation is the biggest accuracy lever we had missed.**
   `*CC*` and `*CCCC*` are the same polymer with the same property value, so the
   dimer of a training row is a new view of a known label. Augmented rows enter

@@ -516,9 +516,14 @@ else:
   # four-model stack once its per-fold mask was in place (0.9047 vs 0.9040). The
   # masking logic is kept in the code because it documents why the unmasked version
   # was fake, but it ships disabled.
+  # eps = n^2 + eps_ion. DFPT stores the electronic and ionic contributions to
+  # the static dielectric constant separately; the electronic part IS n^2 by
+  # Maxwell's relation, so eps - nc^2 is the ionic term, not a fitting residual.
+  # Verified on this data: it is positive for all 134 co-observed polymers.
+  ion = ionic_term(train_df, X_tr, all_canon, X_all, fold_id, seed=SEED)
   final_oof, final_test, phys_info = apply_physics(
       train_df, stacked_oof, test_df, stacked_test, fold_id, partners, is_true,
-      n_rounds=0)
+      n_rounds=0, ionic=ion)
   report(train_df, final_oof, "stacked + staged physics")
 
   final_oof, final_test, pr_info = partner_regression(

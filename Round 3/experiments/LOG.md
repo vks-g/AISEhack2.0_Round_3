@@ -128,6 +128,28 @@ Record what did NOT work here so no session retries it.
   four decimals. Kept because it is the correct construction, not because it
   helps. A base-model gain that survives the stack is the exception, not the
   rule: the stack is already correcting much of what it fixes.
+- **Blending with the teammate's pipeline is worth ~+0.004 but is NOT SUBMITTABLE
+  as a CSV merge.** Their `oof_and_preds/` aligned perfectly onto our rows
+  (7405/7405 by canonical SMILES + target_type; test exact by id). Measured on
+  our metric: theirs 0.9137, ours 0.9162, blend 0.9203 at w=0.4-0.5 (flat
+  optimum, so the weight is not a knife-edge). They are better on egb (0.950 vs
+  0.943) and egc; we are better on eps (0.874 vs 0.853) and nc (0.928 vs 0.916) --
+  genuinely complementary methods.
+
+  Rules 6.2.2 and 7.2 block it: "all submissions must be generated entirely
+  within a Kaggle Notebook", "all stages must execute within a single run", and
+  the hosts re-execute the pinned notebook end-to-end. Averaging two notebooks'
+  outputs offline is a prediction-only submission and is invalidated. A legal
+  blend needs BOTH pipelines inside one notebook -- ~7.5 h against a 9 h GPU
+  session, never run end to end, and a timeout means no submission at all.
+
+  Also note their OOF is inflated: all three of their notebooks early-stop GBDTs
+  on the fold's own validation rows, so the +0.0041 is an overestimate and the
+  true optimal weight is lower than 0.4.
+
+  DECISION: ship ours alone; their notebook is the second final pick. Two
+  genuinely different approaches as the two finals is the better hedge when the
+  public leaderboard is only 37% of the test set.
 - **eps = n² + ε_ion is an exact DFPT decomposition, not a fitted residual, and
   it is the largest physics gain in the pipeline.** The static dielectric
   constant is computed as an electronic part plus an ionic part; the electronic

@@ -98,24 +98,40 @@ training rows. Everything here is sized around that fact.
 
 ## Runtime
 
-Measured on an 11-core laptop, per full out-of-fold pass (10 folds for the
-~220-row targets, 5 for `tg`/`egc`):
+Measured on an 11-core laptop (CPU only), for the configuration this notebook
+actually ships -- 10 folds, 15 for the four ~220-row targets:
 
-| stage | local | note |
+| stage | local (11-core CPU) | note |
 |---|---|---|
-| featurisation (12,345 molecules) | 25 s | 9 processes |
-| LightGBM | 343 s | |
-| XGBoost | 232 s | |
-| CatBoost | 486 s | the slowest booster |
-| multi-task NN, per seed | 1098 s | 2 seeds here |
-| SMILES CNN, per seed | ~1100 s | 2 seeds here |
-| stack + physics | ~10 s | |
+| featurisation (12,345 molecules) | 321 s | serial inside a notebook |
+| LightGBM | 499 s | |
+| XGBoost | 307 s | |
+| CatBoost | 772 s | slowest booster |
+| multi-task NN | 4577 s | 3 seeds |
+| **periodic GNN** | **15,587 s per seed** | 80 epochs; **2 seeds here** |
+| leak-free universe pass | ~500 s | a second partner-free LightGBM |
+| stack + physics + partner regression | ~10 s | |
+| explainability + invariance + domain | ~600 s | |
 
-Kaggle CPU sessions give 4 cores, so expect roughly 2.5x these figures — on the
-order of 3-4 hours, inside the 12-hour limit. On a GPU session the two neural
-models are far faster and the total drops well under 2 hours. Nothing here
-branches on elapsed time, so a slower machine produces the *same* result, only
-later — which is what rule 7.2 requires of the pinned version.
+The graph net dominates: ~31,000 s of the ~38,000 s local CPU total.
+
+On a Kaggle **T4 GPU** session the two neural models run on the GPU while the
+boosters, featurisation and universe pass stay on 4 CPU cores (~2.75x slower than
+this laptop, ~2.3 h). The GNN's per-batch collation is Python-side, which caps its
+GPU speedup:
+
+| GNN GPU speedup | GNN | total |
+|---|---|---|
+| 2x | 4.3 h | **~7.0 h** |
+| 3x | 2.9 h | **~5.6 h** |
+| 4x | 2.2 h | **~4.9 h** |
+
+So expect **5-7 hours**, inside the limit across that whole band. `epochs=80` is
+the value the 0.8805 GNN result was measured at; 2 seeds x 110 epochs would span
+6.7-9.6 h, whose top end risks producing no submission at all.
+
+Nothing here branches on elapsed time, so a slower machine produces the *same*
+result, only later -- which is what rule 7.2 requires of the pinned version.
 
 ## Compliance
 

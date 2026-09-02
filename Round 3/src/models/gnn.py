@@ -53,7 +53,9 @@ HP = dict(
     dropout=0.10,
     lr=1.5e-3,
     weight_decay=1e-5,
-    epochs=110,
+    epochs=80,           # the MEASURED setting (0.8805 @ 10 folds/80 ep/1 seed).
+                         # 110 was never validated and 2 seeds x 110 spans
+                         # 6.7-9.6 h on a Kaggle T4 -- the top end loses the run.
     batch_size=128,
     warmup_frac=0.05,
     final_lr_frac=0.05,

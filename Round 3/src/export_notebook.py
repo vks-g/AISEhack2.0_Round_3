@@ -137,9 +137,19 @@ result, only later -- which is what rule 7.2 requires of the pinned version.
 
 Every stage runs inside this single execution. Specifically:
 
-* **No external data.** Only the attached competition files are read.
-  `DATA_DIR` is resolved from an explicit candidate list — there is no recursive
-  glob over `/kaggle/input`, so no attached dataset can be picked up silently.
+* **No external data**, with one host-sanctioned exception. Two things are read:
+  the competition files, and the Round-2 `tg`/`egc` label file that the official
+  `base_line_model.ipynb` itself downloads (§7b) — the hosts were asked directly
+  and confirmed it is in scope. Neither is adopted blindly, and in both cases the
+  guard is a **content check, not the absence of a directory walk**:
+  `DATA_DIR` takes an explicit candidate list first, then a depth-limited search
+  that accepts a directory only if it holds **both** `train.csv` and `test.csv`;
+  the archive loader sweeps `/kaggle/input` but accepts a file only if it
+  validates as a **two-property (`tg`,`egc`) label table**, which is what stops an
+  attached copy of `train.csv` — also a valid label table, but spanning all seven
+  — being adopted as the archive. Every path considered is printed, the one chosen
+  is named, and the end-of-run audit re-checks that no label came from anywhere
+  else.
 * **No pretrained weights and no uploaded artifacts.** Nothing is loaded that
   this run did not itself produce: nothing is deserialised from disk, no
   checkpoint is imported, no feature cache is read. Every model is trained here.

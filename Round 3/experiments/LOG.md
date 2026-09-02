@@ -27,6 +27,7 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | + partner-Ridge as a base FEATURE | 42 | **0.9097** | 0.9084 | 0.9159 | 0.9426 | 0.8583 | 0.9128 | 0.8957 | 0.9338 | — | 502s | biggest single feature-level gain |
 | 2026-09-01 | + nested-OOF partner-Ridge feature | 42 | **0.9097** | 0.9085 | 0.9144 | 0.9443 | 0.8557 | 0.9151 | 0.8973 | 0.9329 | — | 1024s | **SHIPPED**; identical mean to the in-sample variant |
 | 2026-09-01 | both leaks fixed: clean universe + cross-fitted test weight | 42 | **0.9014** | 0.9085 | 0.9104 | 0.9432 | 0.8333 | 0.9047 | 0.8842 | 0.9256 | — | 282s | **corrected**; CV was inflated +0.008 by the cycle |
+| 2026-09-02 | v3: fold-averaged test preds, 10 folds everywhere, two-pass shrunk physics, 3-seed NN | 42 | **0.9015** | 0.9118 | 0.9122 | 0.9406 | 0.8319 | 0.9060 | 0.8819 | 0.9258 | — | 1447s | **SHIPPED**. CV flat vs v2 (0.9014) BY DESIGN — these are transfer fixes and CV cannot measure transfer |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026
@@ -121,6 +122,30 @@ Record what did NOT work here so no session retries it.
   four decimals. Kept because it is the correct construction, not because it
   helps. A base-model gain that survives the stack is the exception, not the
   rule: the stack is already correcting much of what it fixes.
+- **We refit on 100% of the data for test predictions; they average the fold
+  models. That was the structural bug.** `per_property_oof` trained K fold models
+  to produce the OOF, threw them away, then fit ONE fresh model on all rows for
+  the test prediction. So the stack's Ridge coefficients and the physics weights
+  were calibrated on columns from (K-1)/K-trained models and then fed a column
+  from a 100%-trained model — different objects. It also discarded free bagging
+  on 3 of our 4 base models (only the NN averaged folds). Their notebook averages
+  ~80 fold models per test row and refits nothing. Fixed in v3.
+- **Shrink every fitted blend weight to 0.75 of its value.** An argmax over a
+  21-point grid chosen on 50-135 rows is biased high by construction;
+  cross-fitting averages the noise but not the bias. Measured FREE locally
+  (0.9014 → 0.9020) while cutting test-side perturbation 25-33%.
+- **Per-level physics staging bought nothing.** One weight per target scored
+  0.9006 vs 0.9005 for the staged version — identical, with a third of the free
+  parameters and ~30% less test movement. Replaced with a two-pass split
+  (all sources measured / not).
+- **CV cannot measure a transfer fix.** v3 scores 0.9015 against v2's 0.9014.
+  That is the expected and correct outcome: fold-averaging, shrinkage and
+  parameter reduction change how well the pipeline generalises, not how well it
+  fits the validation set. Do not read a flat CV as "no improvement" here.
+- **Do NOT copy their per-fold top-500 feature selection** — measured, it LOSES
+  0.0046 on our small targets. And note all three of their notebooks early-stop
+  GBDTs on the fold's own validation rows, which inflates their 0.903 OOF; the
+  real model-quality gap to their 0.883 LB is wider than the headline suggests.
 - **THE BIG ONE — the partner universe was cyclic, and it cost a submission.**
   `partner_frame()` fills a *missing* partner with a model prediction. But those
   predictions come from base models that receive `true_<other>` as features, so

@@ -46,7 +46,7 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
     base_oof, base_test, tree_universe = {}, {}, {}
 
     for name in models:
-        key = f"{name}_f{n_folds}_s{seed}_{scheme}_p{int(use_partners)}_pf{int(use_physics_feature)}_pr{int(use_partner_ridge)}v2"
+        key = f"{name}_f{n_folds}_s{seed}_{scheme}_p{int(use_partners)}_pf{int(use_physics_feature)}_pr{int(use_partner_ridge)}v3"
         hit = O.cache_get(key) if use_cache else None
         if hit is not None:
             base_oof[name], base_test[name] = hit["oof"], hit["test"]
@@ -114,7 +114,7 @@ def main(models, n_folds=10, seed=42, nn_seeds=(42, 202, 777), out=None,
     # property -- including the one we are about to predict from it. That closes
     # a one-hop cycle and inflated OOF by +0.008 (0.9097 -> 0.9014 once removed)
     # while contributing nothing on test, where no such labels exist.
-    ck = f"cleanuni_f{n_folds}_s{seed}"
+    ck = f"cleanuni_f{n_folds}_s{seed}v3"
     hit = O.cache_get(ck) if use_cache else None
     if hit is not None:
         uni = hit["universe"]

@@ -152,7 +152,7 @@ import catboost as cb
 
 SEED = 42
 N_FOLDS = 10
-NN_SEEDS = [42, 202]
+NN_SEEDS = [42, 202, 777]
 
 random.seed(SEED)
 np.random.seed(SEED)

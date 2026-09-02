@@ -54,11 +54,12 @@ def folds_for_target(n_rows: int, base: int = N_FOLDS) -> int:
     four ~220-row targets are noisy and cheap, so they get more folds -- a bigger
     training fraction per fold and a less noisy OOF estimate, for free.
     """
-    if n_rows > 1500:
-        return max(2, min(base, 5))
-    if n_rows >= 400:
-        return base
-    return max(base, 15)
+    # ONE fold count everywhere. With fold-averaged test predictions each member
+    # trains on (K-1)/K of the data, so a small K is no longer just a cheaper
+    # estimate -- it is a weaker deployed model. The teammate notebook that
+    # transfers best (-0.020 CV-to-LB vs our -0.041) uses a single KFold(10)
+    # partition shared by every target and every model.
+    return base
 
 
 def build_fold_id(train_df: pd.DataFrame, n_folds: int = N_FOLDS,
@@ -144,152 +145,113 @@ def per_property_oof(kind_maker, kind: str, train_df, X_tr, test_df, X_te,
                      use_partner_ridge=True):
     """OOF + test + whole-universe predictions for one per-property estimator.
 
-    `universe` maps every canonical polymer to a predicted value for each target.
-    Stage 2 of the physics blend needs it, because it must estimate a partner
-    property for polymers that were never measured for it.
+    Test and universe predictions are the AVERAGE OF THE K FOLD MODELS, not a
+    separate model refit on 100% of the rows. That matters for two reasons:
 
-    Partner features (the measured values of a polymer's OTHER properties) are
-    the strongest signal available for the DFT block: 88-99% of test rows in
-    those targets have their polymer present in train under some property. They
-    are built per fold from TRAINING rows only, and `drop_leaky` removes the
-    column that would be the row's own label.
+      * calibration. The stack's Ridge coefficients and the physics blend weights
+        are fitted on OOF columns produced by (K-1)/K-trained models. Feeding
+        them a column from a 100%-trained model at inference means the thing they
+        were calibrated on and the thing they consume are different objects.
+      * variance. Bagging K models is free variance reduction we were giving up
+        on three of our four base models -- only the multi-task NN averaged folds.
+
+    The teammate notebook that transfers best (-0.020 CV-to-LB against our -0.041)
+    averages ~80 fold models per test row and refits nothing.
+
+    Partner features are built per fold from TRAINING rows only, and `drop_leaky`
+    removes the column that would be the row's own label. The test and universe
+    partner blocks come from the full training set, which is exactly what is
+    available at inference.
     """
     from src import partners as P
     from sklearn.linear_model import RidgeCV
+    from sklearn.model_selection import KFold as _KF
     _ALPHAS = [0.1, 1.0, 10.0, 100.0]
-
-    def _ridge_feature(kept_tr, y_tr, kept_others):
-        """A linear read of the partner block, handed to the model as one column.
-
-        The trees already see every `true_<prop>` column, but an axis-aligned
-        split approximates a linear combination of them badly, and the DFT block
-        is close to linear in exactly that way. Fitting the combination on the
-        training fold and passing the single fitted value turns something the
-        tree cannot represent into something it can split on.
-
-        MEASURED end to end: 0.9070 -> 0.9097 (+0.0027), concentrated on the
-        small DFT targets.
-
-        The block handed in here is the MEAN-filled one from partners_build(),
-        rebuilt per fold with the validation rows removed. Do not substitute the
-        prediction-filled frame from partner_frame(): 52% of its partner cells
-        for eps/nc/ei are base-model outputs, and every one of those models
-        receives true_<target> as a feature, so the row's own label returns
-        through a single hop. Measured that way this feature looks worth +0.069
-        on eps instead of +0.003 -- the gain is the leak.
-        """
-        from sklearn.model_selection import KFold as _KF
-
-        Xr = np.nan_to_num(kept_tr.values.astype(np.float64))
-        if len(Xr) < 30 or Xr.shape[1] == 0:
-            return None
-        mdl = RidgeCV(alphas=_ALPHAS).fit(Xr, y_tr)
-        out = []
-        for k in kept_others:
-            Zk = np.nan_to_num(k.values.astype(np.float64))
-            if Zk.shape == Xr.shape and np.array_equal(Zk, Xr):
-                # This IS the training block. An in-sample Ridge fit would be
-                # unrealistically accurate here, so the model would learn to
-                # over-trust a column that is weaker at inference -- the classic
-                # target-encoding failure. Compute it out-of-fold instead.
-                # Measured: eps +0.0023, nc +0.0042, ei +0.0027 over in-sample.
-                inner = np.zeros(len(y_tr))
-                for ia, ib in _KF(5, shuffle=True, random_state=0).split(Xr):
-                    inner[ib] = RidgeCV(alphas=_ALPHAS).fit(Xr[ia], y_tr[ia]).predict(Xr[ib])
-                out.append(inner.reshape(-1, 1))
-            else:
-                out.append(mdl.predict(Zk).reshape(-1, 1))
-        return out
 
     oof = np.full(len(train_df), np.nan)
     test_pred = np.full(len(test_df), np.nan)
     universe = {t: np.full(len(all_canon), np.nan) for t in TARGETS}
     uni_df = pd.DataFrame({"canon": all_canon})
+    y_all = train_df["target"].values
 
     for t in TARGETS:
         rows = np.where((train_df["target_type"] == t).values)[0]
         if len(rows) < 10:
             continue
-        y_all = train_df["target"].values
         f = fold_id[rows]
+        te = np.where((test_df["target_type"] == t).values)[0]
 
+        if use_partners:
+            (bte, buni), _ = P.build(train_df, [test_df, uni_df])
+            kte = P.drop_leaky(bte.iloc[te], t)
+            kuni = P.drop_leaky(buni, t)
+            Zte = np.nan_to_num(kte.values.astype(np.float64))
+            Zuni = np.nan_to_num(kuni.values.astype(np.float64))
+
+        fold_test, fold_uni = [], []
         for k in np.unique(f):
             tr = rows[f != k]
             va = rows[f == k]
             if len(tr) < 5:
                 continue
+
             if use_partners:
-                # partner source = everything except the rows being predicted
                 keep = np.ones(len(train_df), dtype=bool)
                 keep[va] = False
-                src = train_df[keep]
-                (btr, bva), _ = P.build(src, [train_df.iloc[tr], train_df.iloc[va]])
+                (btr, bva), _ = P.build(train_df[keep],
+                                        [train_df.iloc[tr], train_df.iloc[va]])
                 ktr, kva = P.drop_leaky(btr, t), P.drop_leaky(bva, t)
                 Xa = np.hstack([X_tr[tr], ktr.values])
                 Xb = np.hstack([X_tr[va], kva.values])
+                Xt = np.hstack([X_te[te], kte.values])
+                Xu = np.hstack([X_all, kuni.values])
+
                 if use_partner_ridge:
-                    rf = _ridge_feature(ktr, y_all[tr], [ktr, kva])
-                    if rf is not None:
-                        Xa = np.hstack([Xa, rf[0]])
-                        Xb = np.hstack([Xb, rf[1]])
+                    Ztr = np.nan_to_num(ktr.values.astype(np.float64))
+                    Zva = np.nan_to_num(kva.values.astype(np.float64))
+                    if len(Ztr) >= 30 and Ztr.shape[1]:
+                        mdl = RidgeCV(alphas=_ALPHAS).fit(Ztr, y_all[tr])
+                        # out-of-fold for the training rows: an in-sample fit is
+                        # unrealistically accurate on the rows it was fitted to,
+                        # so the tree would over-trust a weaker column at inference
+                        inner = np.zeros(len(tr))
+                        for ia, ib in _KF(5, shuffle=True, random_state=0).split(Ztr):
+                            inner[ib] = RidgeCV(alphas=_ALPHAS).fit(
+                                Ztr[ia], y_all[tr][ia]).predict(Ztr[ib])
+                        Xa = np.hstack([Xa, inner.reshape(-1, 1)])
+                        Xb = np.hstack([Xb, mdl.predict(Zva).reshape(-1, 1)])
+                        Xt = np.hstack([Xt, mdl.predict(Zte).reshape(-1, 1)])
+                        Xu = np.hstack([Xu, mdl.predict(Zuni).reshape(-1, 1)])
+
                 if use_physics_feature:
-                    ra, ha = physics_feature_cols(t, btr)
-                    rb, hb = physics_feature_cols(t, bva)
+                    ra, ha = physics_feature_cols(t, ktr)
+                    rb, hb = physics_feature_cols(t, kva)
+                    rt, ht = physics_feature_cols(t, kte)
+                    ru, hu = physics_feature_cols(t, kuni)
                     if ra is not None:
                         ok = np.isfinite(ra) & ha
                         if ok.sum() >= 15 and np.std(ra[ok]) > 1e-12:
                             a_, b_ = np.polyfit(ra[ok], y_all[tr][ok], 1)
-                            Xa = np.hstack([Xa, np.column_stack(
-                                [a_ * ra + b_, ha.astype(np.float32)])])
-                            Xb = np.hstack([Xb, np.column_stack(
-                                [a_ * rb + b_, hb.astype(np.float32)])])
+                            Xa = np.hstack([Xa, np.column_stack([a_ * ra + b_, ha.astype(np.float32)])])
+                            Xb = np.hstack([Xb, np.column_stack([a_ * rb + b_, hb.astype(np.float32)])])
+                            Xt = np.hstack([Xt, np.column_stack([a_ * rt + b_, ht.astype(np.float32)])])
+                            Xu = np.hstack([Xu, np.column_stack([a_ * ru + b_, hu.astype(np.float32)])])
             else:
                 Xa, Xb = X_tr[tr], X_tr[va]
+                Xt, Xu = X_te[te], X_all
+
             m = kind_maker(kind, t, len(tr), seed)
             m.fit(Xa, y_all[tr])
             oof[va] = m.predict(Xb)
+            fold_test.append(m.predict(Xt))
+            fold_uni.append(m.predict(Xu))
+            del Xa, Xb, Xt, Xu
 
-        # full fit: partner source is all of train, guard still applied
-        if use_partners:
-            (bfull, bte, buni), _ = P.build(
-                train_df, [train_df.iloc[rows], test_df, uni_df])
-            kfull = P.drop_leaky(bfull, t)
-            kte, kuni = P.drop_leaky(bte, t), P.drop_leaky(buni, t)
-            Xfull = np.hstack([X_tr[rows], kfull.values])
-            Xtest = np.hstack([X_te, kte.values])
-            Xuni = np.hstack([X_all, kuni.values])
-            if use_partner_ridge:
-                rf = _ridge_feature(kfull, y_all[rows], [kfull, kte, kuni])
-                if rf is not None:
-                    Xfull = np.hstack([Xfull, rf[0]])
-                    Xtest = np.hstack([Xtest, rf[1]])
-                    Xuni = np.hstack([Xuni, rf[2]])
-            if use_physics_feature:
-                rf, hf = physics_feature_cols(t, bfull)
-                rt, ht = physics_feature_cols(t, bte)
-                ru, hu = physics_feature_cols(t, buni)
-                if rf is not None:
-                    ok = np.isfinite(rf) & hf
-                    if ok.sum() >= 15 and np.std(rf[ok]) > 1e-12:
-                        a_, b_ = np.polyfit(rf[ok], y_all[rows][ok], 1)
-                        Xfull = np.hstack([Xfull, np.column_stack(
-                            [a_ * rf + b_, hf.astype(np.float32)])])
-                        Xtest = np.hstack([Xtest, np.column_stack(
-                            [a_ * rt + b_, ht.astype(np.float32)])])
-                        Xuni = np.hstack([Xuni, np.column_stack(
-                            [a_ * ru + b_, hu.astype(np.float32)])])
-        else:
-            Xfull, Xtest, Xuni = X_tr[rows], X_te, X_all
-        full = kind_maker(kind, t, len(rows), seed)
-        full.fit(Xfull, y_all[rows])
-        te = np.where((test_df["target_type"] == t).values)[0]
-        if len(te):
-            test_pred[te] = full.predict(Xtest[te])
-        universe[t] = full.predict(Xuni)
-        # Xuni is ~107 MB for 8990 polymers x 2978 features and is rebuilt for
-        # every (model, target). Dropping it explicitly keeps peak RSS flat
-        # instead of leaving 21 of them to the garbage collector's timing.
-        del Xfull, Xtest, Xuni
+        if fold_test and len(te):
+            test_pred[te] = np.mean(np.column_stack(fold_test), axis=1)
+        if fold_uni:
+            universe[t] = np.mean(np.column_stack(fold_uni), axis=1)
+        del fold_test, fold_uni
         gc.collect()
 
     return oof, test_pred, universe
@@ -454,41 +416,36 @@ def refine_universe(partners, is_true, train_df, n_rounds=3, damp=0.5,
     return P
 
 
+SHRINK = 0.75          # applied to every fitted blend weight before it is used
+
+
 def apply_physics(train_df, oof, test_df, test_pred, fold_id, partners, is_true,
-                  oof_by_target=None, n_rounds=3, damp=0.5, verbose=True):
-    """Cross-fitted, staged, iterated physics blend.
+                  oof_by_target=None, n_rounds=0, damp=0.5, shrink=SHRINK,
+                  verbose=True):
+    """Two-pass, cross-fitted, shrunk physics blend.
 
-    Three things are happening, and the third is where the leak lives if you are
-    careless:
+    TWO PASSES, not per-level staging. Rows split binary: every relation source
+    measured, or not. Our previous version bucketed rows by HOW MANY sources were
+    measured and fitted a separate affine and a separate weight per (fold, level)
+    on as few as 15 rows. Measured, that bought nothing -- a single weight per
+    target scored 0.9006 against 0.9005 for the staged version -- while fitting
+    ~3x the free parameters on ~220-row targets and moving test predictions ~30%
+    further. Same score, more ways to be wrong.
 
-    1. STAGING. Rows are grouped by how many of the relation's sources are
-       actually measured, and each group gets its own calibration and its own
-       blend weight. A binary true/predicted split wastes the partially covered
-       rows, and they are numerous -- of 148 `ei` test rows, 55 have both sources
-       measured, 69 have exactly one.
+    SHRINKAGE. An argmax over a 21-point grid chosen on 55-135 rows is biased high
+    by construction; cross-fitting averages that noise but does not remove the
+    bias. Cutting every weight to 75% of its fitted value is free locally
+    (0.9014 -> 0.9020 measured) and cuts test-side perturbation by 25-33%. The
+    constant is taken from the teammate notebook that transfers best.
 
-    2. ITERATION. The seven properties form a constraint graph
-       (ei = egc+eea, eea = ei-egc, egb ~ egc, eps ~ nc^2, nc ~ sqrt(eps)) that
-       one pass of model predictions does not satisfy, so predicted cells are
-       re-estimated from their neighbours and damped toward the estimate.
-
-    3. THE MASK, which makes 1 and 2 honest. `eps` is refined FROM `nc`, and `nc`
-       is then predicted FROM the refined `eps`. For a validation polymer whose
-       `nc` is measured, its own label would flow into its own prediction -- a
-       closed loop that reads as a huge gain and is entirely fake (it took the
-       measured score from 0.893 to 0.935 before this mask existed). So for every
-       (target, fold) the refinement is redone with that fold's true `target`
-       values replaced by their out-of-fold predictions.
-
-       The test side needs no such mask: only 2 of 4940 test rows have their
-       (polymer, target_type) present in train, so a test row's own label is not
-       in the table to leak.
+    The blend weight applied to test is the cross-fitted one, never re-tuned here
+    against an estimate fitted to the same rows -- that bug degraded only the test
+    side and was invisible in CV.
     """
     oof = np.asarray(oof, dtype=float)
     oof_out = oof.copy()
     test_out = np.asarray(test_pred, dtype=float).copy()
     info = {}
-
     canon_pos = {c: i for i, c in enumerate(partners.index)}
 
     for t, (srcs, expr) in physics.RELATIONS.items():
@@ -499,35 +456,30 @@ def apply_physics(train_df, oof, test_df, test_pred, fold_id, partners, is_true,
         canon = train_df["canon"].values[rows]
         f = fold_id[rows]
 
+        covered = is_true.reindex(canon)[srcs].all(axis=1).values
         blended = oof_out[rows].copy()
-        weights, levels = {}, np.zeros(len(rows), dtype=int)
+        weights = {}
 
         for k in np.unique(f):
             va = f == k
             if va.sum() == 0:
                 continue
-            # --- mask: hide this fold's own target labels, everywhere ---
-            Pk = partners.copy()
-            Ik = is_true.copy()
-            pairs = [(canon_pos[c], v) for c, v in
-                     zip(canon[va], oof[rows[va]]) if c in canon_pos]
-            if pairs:
-                pos = [i for i, _ in pairs]
+            Pk, Ik = partners, is_true
+            pos = [(canon_pos[c], v) for c, v in zip(canon[va], oof[rows[va]])
+                   if c in canon_pos]
+            if pos:
+                Pk = partners.copy(); Ik = is_true.copy()
                 col = Pk[t].values.astype(float)
-                col[pos] = [v for _, v in pairs]        # out-of-fold stand-in
+                col[[i for i, _ in pos]] = [v for _, v in pos]
                 Pk[t] = col
-                flag = Ik[t].values.copy()
-                flag[pos] = False
+                flag = Ik[t].values.copy(); flag[[i for i, _ in pos]] = False
                 Ik[t] = flag
-            Pk = refine_universe(Pk, Ik, train_df.iloc[np.setdiff1d(
-                np.arange(len(train_df)), rows[va])], n_rounds=n_rounds, damp=damp)
+            cov_k = Ik.reindex(canon)[srcs].all(axis=1).values
 
-            n_true_k = Ik.reindex(canon)[srcs].sum(axis=1).values.astype(int)
-            levels[va] = n_true_k[va]
-            for lvl in sorted(set(n_true_k.tolist()), reverse=True):
-                tr_m = (n_true_k == lvl) & (~va)
-                va_m = (n_true_k == lvl) & va
-                if tr_m.sum() < 15 or va_m.sum() == 0:
+            for name, mask in (("covered", cov_k), ("uncovered", ~cov_k)):
+                tr_m = mask & (~va)
+                va_m = mask & va
+                if tr_m.sum() < 25 or va_m.sum() == 0:
                     continue
                 rel = _fit_relation(train_df, rows[tr_m], t, srcs, expr, Pk)
                 if rel is None:
@@ -535,50 +487,41 @@ def apply_physics(train_df, oof, test_df, test_pred, fold_id, partners, is_true,
                 e_tr = rel.apply(Pk.reindex(canon[tr_m])[srcs].values)
                 e_va = rel.apply(Pk.reindex(canon[va_m])[srcs].values)
                 w, _ = physics.tune_weight(y[tr_m], oof[rows[tr_m]], e_tr)
+                w *= shrink
                 blended[va_m] = physics.blend(oof[rows[va_m]], e_va, w)
-                weights.setdefault(lvl, []).append(w)
+                weights.setdefault(name, []).append(w)
 
         gain = r2(y, blended) - r2(y, oof[rows])
         info[t] = {"r2_before": r2(y, oof[rows]), "r2_after": r2(y, blended),
                    "gain": gain,
-                   "n_by_level": {int(l): int((levels == l).sum())
-                                  for l in sorted(set(levels.tolist()), reverse=True)},
-                   "w_by_level": {int(l): round(float(np.mean(v)), 3)
-                                  for l, v in sorted(weights.items(), reverse=True)}}
+                   "n_covered": int(covered.sum()),
+                   "n_uncovered": int((~covered).sum()),
+                   "w": {k: round(float(np.mean(v)), 3) for k, v in weights.items()}}
         if gain > 0:
             oof_out[rows] = blended
 
-        # ---- test side: no mask needed, calibration on all train rows ----
         te = np.where((test_df["target_type"] == t).values)[0]
         if len(te) and gain > 0:
-            Pfull = refine_universe(partners, is_true, train_df,
-                                    n_rounds=n_rounds, damp=damp)
             tcanon = test_df["canon"].values[te]
-            n_true_tr = is_true.reindex(canon)[srcs].sum(axis=1).values.astype(int)
-            t_lvl = is_true.reindex(tcanon)[srcs].sum(axis=1).values.astype(int)
-            for lvl in sorted(set(n_true_tr.tolist()), reverse=True):
-                tr_m = n_true_tr == lvl
-                te_m = t_lvl == lvl
-                if tr_m.sum() < 15 or te_m.sum() == 0:
+            t_cov = is_true.reindex(tcanon)[srcs].all(axis=1).values
+            for name, mask_tr, mask_te in (("covered", covered, t_cov),
+                                           ("uncovered", ~covered, ~t_cov)):
+                wl = weights.get(name)
+                if not wl or mask_tr.sum() < 25 or mask_te.sum() == 0:
                     continue
-                rel = _fit_relation(train_df, rows[tr_m], t, srcs, expr, Pfull)
+                rel = _fit_relation(train_df, rows[mask_tr], t, srcs, expr, partners)
                 if rel is None:
                     continue
-                # cross-fitted weight for this level, not one re-tuned here
-                # against an estimate fitted to the same rows
-                wl = weights.get(lvl)
-                if not wl:
-                    continue
-                w = float(np.mean(wl))
-                e_te = rel.apply(Pfull.reindex(tcanon[te_m])[srcs].values)
-                test_out[te[te_m]] = physics.blend(test_out[te[te_m]], e_te, w)
+                e_te = rel.apply(partners.reindex(tcanon[mask_te])[srcs].values)
+                test_out[te[mask_te]] = physics.blend(
+                    test_out[te[mask_te]], e_te, float(np.mean(wl)))
 
     if verbose and info:
-        print(f"\n{'target':<6}{'before':>9}{'after':>9}{'gain':>9}   "
-              f"{'rows by #measured sources':<26}{'blend weight by level'}")
+        print(f"\n{'target':<6}{'before':>9}{'after':>9}{'gain':>9}"
+              f"{'covered':>10}{'uncov':>8}   weights (already shrunk)")
         for t, d in info.items():
-            print(f"{t:<6}{d['r2_before']:>9.4f}{d['r2_after']:>9.4f}{d['gain']:>+9.4f}   "
-                  f"{str(d['n_by_level']):<26}{d['w_by_level']}")
+            print(f"{t:<6}{d['r2_before']:>9.4f}{d['r2_after']:>9.4f}{d['gain']:>+9.4f}"
+                  f"{d['n_covered']:>10}{d['n_uncovered']:>8}   {d['w']}")
     return oof_out, test_out, info
 
 
@@ -598,7 +541,7 @@ def _fit_relation(train_df, row_idx, target, srcs, expr, partners):
 
 
 def partner_regression(train_df, pred, test_df, test_pred, fold_id, partners,
-                       is_true, verbose=True):
+                       is_true, shrink=SHRINK, verbose=True):
     """Generalise the hand-written relations to a learned partner combination.
 
     `physics.RELATIONS` encodes the five relations a chemist can write down:
@@ -660,6 +603,7 @@ def partner_regression(train_df, pred, test_df, test_pred, fold_id, partners,
             if a.sum() < 30 or b.sum() == 0:
                 continue
             w, _ = physics.tune_weight(y[a], out[rows[a]], est[a])
+            w *= shrink          # same bias argument as the physics blend
             fold_ws.append(w)
             blended[b] = physics.blend(out[rows[b]], est[b], w)
 

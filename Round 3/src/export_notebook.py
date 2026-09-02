@@ -631,9 +631,21 @@ _worked = None     # filled in by the loop, so the example costs no extra comput
 FAMILY = {"rd": "RDKit descriptors", "mfp2": "Morgan r=2", "mfp3": "Morgan r=3",
           "ap": "atom pair", "tt": "topological torsion", "mac": "MACCS keys",
           "po": "polymer-specific", "grp": "functional groups",
+          "iv": "intensive twins (per heavy atom)",
+          "el": "element counts & fractions",
+          "chg": "partial-charge statistics",
           "true": "partner property (measured)", "has": "partner availability",
           "n": "partner count", "ridge": "fitted partner combination"}
 _base_cols = feature_names()
+
+# `iv_` is the repetition-invariance family: each extensive RDKit descriptor
+# divided by heavy-atom count, so it does NOT move when a repeat unit is written
+# as its dimer (section 13 measures that). It is named here because it turns out
+# to be the LARGEST family for tg, which means the invariance design choice is
+# also the biggest single driver of the biggest property -- worth seeing rather
+# than reading as an unlabelled abbreviation.
+print("feature families: iv_ = intensive twins, the repetition-invariant view")
+print("(extensive descriptor / heavy atoms) -- see the invariance certificate.")
 
 for t in TARGETS:
     rows = np.where((train_df["target_type"] == t).values)[0]
@@ -666,7 +678,7 @@ for t in TARGETS:
     print("  attribution by feature family:")
     for k, v in fam.items():
         if v >= 0.5:
-            print(f"    {FAMILY.get(k, k):<30} {v:5.1f}%")
+            print(f"    {FAMILY.get(k, k):<33} {v:5.1f}%")
     interp = ser[[c for c in ser.index
                   if c.startswith(("rd_", "po_", "grp_", "true_", "has_", "n_", "ridge_"))]]
     print("  top interpretable features:")

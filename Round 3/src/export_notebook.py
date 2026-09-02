@@ -153,6 +153,7 @@ import catboost as cb
 SEED = 42
 N_FOLDS = 10
 NN_SEEDS = [42, 202, 777]     # multi-task NN: cheap, 3 seeds
+AUX_MAX = 300_000             # auxiliary-corpus sample for the applicability domain
 GNN_SEEDS = [42, 202]         # graph net: far more expensive, 2 seeds
 # Both are FIXED, not chosen from the hardware. Branching the seed count on
 # whether a GPU is present would make the pinned run irreproducible on a
@@ -428,7 +429,12 @@ def build(models, out_path, physics_stage=True):
     cells.append(md("## 13. Polymer-invariance certificate"))
     cells.append(code(INVARIANCE_CELL))
 
-    cells.append(md("## 14. Compliance self-audit"))
+    cells.append(md("## 14. Applicability domain from the auxiliary corpus\n\n"
+                    "Every prediction ships with a statement about whether the model has "
+                    "seen chemistry like it. Measured on our own out-of-fold predictions, "
+                    "so the claim is checkable rather than asserted."))
+    cells.append(code(AUX_CELL))
+    cells.append(md("## 15. Compliance self-audit"))
     cells.append(code(AUDIT_CELL))
 
     nb = {
@@ -718,6 +724,86 @@ _perm = float(np.abs(_inv[_tt].predict(
 assert _perm < 1e-9, f"permutational invariance broken: {_perm}"
 print()
 print(f"PASS: permutational invariance is EXACT (max delta {_perm:.1e}).")
+'''
+
+
+AUX_CELL = '''
+# ============================================================================
+# APPLICABILITY DOMAIN -- what the auxiliary corpus is honestly worth
+# ============================================================================
+# The ~1M PI1M polymer SMILES are provided as competition data. As a model INPUT
+# they add nothing: any embedding of them is a linear re-expression of the Morgan
+# fingerprint the trees already receive in full. Their real value is telling us
+# WHERE the model is extrapolating, so every prediction can ship with a statement
+# about whether the model has seen chemistry like it.
+#
+# Two details make the difference between a useful flag and a constant:
+#   * FOLDED fingerprints are degenerate at this corpus size -- every bit is
+#     occupied, so "fraction unseen" collapses to zero. Unfolded substructure
+#     hashes keep the resolution.
+#   * No corpus molecule carries a `*` attachment point. Comparing raw makes
+#     every polymer novel by definition. Capping `*` as methyl first makes the
+#     two sets chemically comparable.
+try:
+    _t_aux = time.time()
+    from rdkit.Chem import rdFingerprintGenerator as _rfg
+    _gen = _rfg.GetMorganGenerator(radius=2)
+
+    def _subs(smi):
+        _m = Chem.MolFromSmiles(str(smi).replace("[*]", "C").replace("*", "C"))
+        if _m is None:
+            return set()
+        return set(_gen.GetSparseCountFingerprint(_m).GetNonzeroElements().keys())
+
+    _aux_file = None
+    for _f in sorted(os.listdir(DATA_DIR)):
+        if _f.lower().endswith(".csv") and _f.lower().startswith(("pi1m", "smile")):
+            _aux_file = os.path.join(DATA_DIR, _f)
+            break
+    if _aux_file is None:
+        raise FileNotFoundError("no auxiliary corpus in DATA_DIR")
+
+    _ours = {c: _subs(c) for c in dict.fromkeys(train_df["canon"])}
+    _keep = set().union(*_ours.values())
+    print(f"{len(_keep):,} distinct substructures across our molecules")
+
+    _hd = pd.read_csv(_aux_file, nrows=3).columns
+    _sc = next((c for c in _hd if "smi" in c.lower()), _hd[0])
+    _aux = pd.read_csv(_aux_file, usecols=[_sc])[_sc].dropna().astype(str).values
+    if len(_aux) > AUX_MAX:
+        _aux = np.random.default_rng(SEED).choice(_aux, AUX_MAX, replace=False)
+    print(f"corpus: {os.path.basename(_aux_file)}  {len(_aux):,} molecules sampled")
+
+    _seen = set()
+    for _s in _aux:
+        _seen |= (_subs(_s) & _keep)
+
+    _novel = {c: len(h - _seen) for c, h in _ours.items()}
+    _flag = train_df["canon"].map(lambda c: _novel.get(c, 0) > 0).values
+    print(f"corpus covers {len(_seen):,}/{len(_keep):,} of our substructures; "
+          f"{100*_flag.mean():.1f}% of training molecules are OUT OF DOMAIN "
+          f"({time.time()-_t_aux:.0f}s)")
+    print()
+    print(f"{'target':<6}{'n in':>7}{'R2 in':>9}{'n out':>7}{'R2 out':>9}"
+          f"{'MAE in':>10}{'MAE out':>10}")
+    for _t in TARGETS:
+        _m = (train_df["target_type"] == _t).values
+        _y = train_df["target"].values[_m]
+        _p = np.asarray(final_oof)[_m]
+        _fi, _fo = ~_flag[_m], _flag[_m]
+        if _fi.sum() < 20 or _fo.sum() < 20:
+            continue
+        print(f"{_t:<6}{_fi.sum():>7}{r2(_y[_fi], _p[_fi]):>9.3f}{_fo.sum():>7}"
+              f"{r2(_y[_fo], _p[_fo]):>9.3f}"
+              f"{np.abs(_y[_fi]-_p[_fi]).mean():>10.3f}"
+              f"{np.abs(_y[_fo]-_p[_fo]).mean():>10.3f}")
+    print()
+    print("Where the gap is large the flag is doing real work: those molecules are")
+    print("not mispredicted because the model is over-confident, they are simply")
+    print("harder, and the flag says so before anyone trusts the number.")
+except Exception as _e:
+    print(f"applicability domain skipped: {type(_e).__name__}: {_e}")
+    print("(diagnostic only -- the submission does not depend on this section)")
 '''
 
 

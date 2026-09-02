@@ -28,6 +28,11 @@ delta smaller than 2x it is not an improvement — say so rather than claiming a
 | 2026-09-01 | + nested-OOF partner-Ridge feature | 42 | **0.9097** | 0.9085 | 0.9144 | 0.9443 | 0.8557 | 0.9151 | 0.8973 | 0.9329 | — | 1024s | **SHIPPED**; identical mean to the in-sample variant |
 | 2026-09-01 | both leaks fixed: clean universe + cross-fitted test weight | 42 | **0.9014** | 0.9085 | 0.9104 | 0.9432 | 0.8333 | 0.9047 | 0.8842 | 0.9256 | — | 282s | **corrected**; CV was inflated +0.008 by the cycle |
 | 2026-09-02 | v3: fold-averaged test preds, 10 folds everywhere, two-pass shrunk physics, 3-seed NN | 42 | **0.9015** | 0.9118 | 0.9122 | 0.9406 | 0.8319 | 0.9060 | 0.8819 | 0.9258 | — | 1447s | **SHIPPED**. CV flat vs v2 (0.9014) BY DESIGN — these are transfer fixes and CV cannot measure transfer |
+| 2026-09-02 | v4 base: lgbm (3037 feats + dimer aug) | 42 | 0.8721 | | | | | | | | — | 630s | +0.0098 over the 2978-feature build |
+| 2026-09-02 | v4 base: cb | 42 | 0.8762 | | | | | | | | — | 962s | |
+| 2026-09-02 | v4 base: mtnn 3-seed | 42 | 0.8734 | 0.891 | 0.875 | 0.927 | 0.799 | 0.891 | 0.849 | 0.881 | — | 4577s | |
+| 2026-09-02 | **v4 base: periodic GNN** (10 folds, 80 ep, 1 seed) | 42 | **0.8805** | 0.899 | 0.883 | 0.911 | 0.796 | 0.902 | 0.861 | 0.912 | — | 15587s | **best single model**; polyGNN-style periodic graph |
+| 2026-09-02 | **v4 FULL: 5 models → stack → 2-pass shrunk physics → partner regression** | 42 | **0.9109** | 0.9178 | 0.9228 | 0.9434 | 0.8531 | 0.9118 | 0.8897 | 0.9378 | — | — | **SHIPPED** (`submissions/final.ipynb`) |
 <!-- new runs are inserted above this line by .claude/hooks/log-cv-run.sh -->
 
 ## Submission ledger — 3/day, 2 final picks, deadline 3 Sep 2026

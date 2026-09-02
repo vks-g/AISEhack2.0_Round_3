@@ -152,7 +152,12 @@ import catboost as cb
 
 SEED = 42
 N_FOLDS = 10
-NN_SEEDS = [42, 202, 777]
+NN_SEEDS = [42, 202, 777]     # multi-task NN: cheap, 3 seeds
+GNN_SEEDS = [42, 202]         # graph net: far more expensive, 2 seeds
+# Both are FIXED, not chosen from the hardware. Branching the seed count on
+# whether a GPU is present would make the pinned run irreproducible on a
+# different machine, which rule 7.2 does not allow. A CPU-only session simply
+# takes longer and returns the same answer.
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -165,7 +170,7 @@ try:
 except Exception:
     torch = None
 
-print(f"SEED={SEED}  N_FOLDS={N_FOLDS}  NN_SEEDS={NN_SEEDS}")
+print(f"SEED={SEED}  N_FOLDS={N_FOLDS}  NN_SEEDS={NN_SEEDS}  GNN_SEEDS={GNN_SEEDS}")
 print("python", sys.version.split()[0])
 print("numpy", np.__version__, "pandas", pd.__version__)
 '''
@@ -408,7 +413,7 @@ def build(models, out_path, physics_stage=True):
                         '        o, te = cnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)')
     if "gnn" in models:
         branches.append('    elif name == "gnn":\n'
-                        '        o, te = gnn_oof_and_test(train_df, test_df, fold_id, NN_SEEDS)')
+                        '        o, te = gnn_oof_and_test(train_df, test_df, fold_id, GNN_SEEDS)')
     run = (RUN_CELL.replace("__PHYSICS__", "True" if physics_stage else "False")
                    .replace("__MODELS__", repr(list(models)))
                    .replace("__MODEL_BRANCHES__", "\n".join(branches) if branches else "    # (no neural models in this build)"))

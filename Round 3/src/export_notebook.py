@@ -108,11 +108,11 @@ layers, lr 1.5e-3, batch 128 -- costs **135 s per fold per seed on a T4**.
 | featurisation (12,345 molecules) | ~150 s | 3037 features |
 | LightGBM / XGBoost / CatBoost | ~4,300 s | CPU-side, 4 cores |
 | leak-free universe pass | ~1,400 s | a second partner-free LightGBM |
-| multi-task NN | ~4,100 s | **5 seeds** |
-| **periodic GNN** | **~8,400 s** | **3 seeds x 110 epochs x 15 folds** |
+| multi-task NN | ~6,560 s | **8 seeds** |
+| **periodic GNN** | **~10,125 s** | **5 seeds x 110 epochs x 15 folds** |
 | stack + physics + partner regression | ~60 s | |
 | explainability + invariance + domain | ~800 s | |
-| **total** | **~5.4 h** | inside a 9 h GPU session with margin |
+| **total** | **~6.5 h** | inside a 9 h GPU session |
 
 The graph net dominates, as it should -- it is the strongest single model.
 
@@ -172,9 +172,12 @@ import catboost as cb
 
 SEED = 42
 N_FOLDS = 10
-NN_SEEDS = [42, 202, 777, 1337, 2024]   # multi-task NN: 5 seeds, as the 0.916 notebook uses
+NN_SEEDS = [42, 202, 777, 1337, 2024, 3407, 5150, 8888]   # 8 seeds. Their leave-one-out makes
+                                        # the NN the most valuable model (-0.0061 to the stack,
+                                        # -0.0217 on ei) and seed variance its weakness:
+                                        # single seeds averaged 0.8800, the 5-seed mean 0.8935.
 AUX_MAX = 300_000             # auxiliary-corpus sample for the applicability domain
-GNN_SEEDS = [42, 202, 777]              # graph net: 3 seeds; their 3-seed averaging was +0.0048
+GNN_SEEDS = [42, 202, 777, 1337, 2024]  # 5 seeds; second most valuable model (-0.0048 if removed)
 # Both are FIXED, not chosen from the hardware. Branching the seed count on
 # whether a GPU is present would make the pinned run irreproducible on a
 # different machine, which rule 7.2 does not allow. A CPU-only session simply

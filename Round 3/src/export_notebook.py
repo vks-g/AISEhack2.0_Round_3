@@ -625,6 +625,9 @@ EXPLAIN_CELL = '''
 # submission, and it would miss the most interesting result: on the DFT block the
 # partner properties dominate, which is the physics showing up directly in the
 # attribution rather than being asserted.
+WORKED = "tg"      # the property whose single-molecule example is shown below
+_worked = None     # filled in by the loop, so the example costs no extra compute
+
 FAMILY = {"rd": "RDKit descriptors", "mfp2": "Morgan r=2", "mfp3": "Morgan r=3",
           "ap": "atom pair", "tt": "topological torsion", "mac": "MACCS keys",
           "po": "polymer-specific", "grp": "functional groups",
@@ -653,6 +656,8 @@ for t in TARGETS:
     idx = np.arange(len(rows)) if len(rows) <= 800 else \
         np.random.RandomState(SEED).choice(len(rows), 800, replace=False)
     contrib = mdl.model.booster_.predict(Xt[idx], pred_contrib=True)
+    if t == WORKED:
+        _worked = dict(cols=cols, contrib=contrib, idx=idx, rows=rows, Xt=Xt, mdl=mdl)
     ser = pd.Series(np.abs(contrib[:, :-1]).mean(axis=0), index=cols).sort_values(ascending=False)
 
     fam = ser.groupby([c.split("_", 1)[0] for c in ser.index]).sum()
@@ -667,6 +672,59 @@ for t in TARGETS:
     print("  top interpretable features:")
     for k, v in interp.head(10).items():
         print(f"    {k:<32} {v:.4g}")
+
+# ---------------------------------------------------------------------------
+# ONE WORKED SINGLE-MOLECULE EXPLANATION
+#
+# The tables above say what drives each property ON AVERAGE. This says why the
+# model made ONE specific prediction -- the form a materials scientist can check
+# against chemical intuition, and the form that shows the attribution is exact
+# rather than indicative. It reuses the SHAP matrix computed above, so it costs
+# no extra training and no extra prediction.
+# ---------------------------------------------------------------------------
+if _worked is not None:
+    _c, _cols = _worked["contrib"], _worked["cols"]
+    _rows, _idx, _Xw = _worked["rows"], _worked["idx"], _worked["Xt"]
+
+    # Deterministic pick: the highest-predicted polymer in the explained sample.
+    # "Why does the model think THIS one has the highest Tg?" is a question with
+    # a checkable chemical answer, and an extreme case makes the drivers legible.
+    _tot = _c.sum(axis=1)
+    _pick = int(np.argmax(_tot))
+    _grow = _rows[_idx[_pick]]
+    _base = float(_c[_pick, -1])
+    _sv = pd.Series(_c[_pick, :-1], index=_cols)
+
+    print()
+    print(f"===== worked example: a single molecule, {WORKED} =====")
+    print(f"  SMILES      {train_df['canon'].values[_grow]}")
+    print(f"  measured    {train_df['target'].values[_grow]:.2f}")
+    print(f"  predicted   {float(_tot[_pick]):.2f}")
+    print(f"  base value  {_base:.2f}   (mean prediction over the training rows)")
+    print()
+    print(f"  {'feature':<34}{'its value':>12}{'SHAP':>10}{'running':>10}")
+    _run, _top = _base, _sv.reindex(_sv.abs().sort_values(ascending=False).index).head(12)
+    for _k, _v in _top.items():
+        _run += _v
+        print(f"  {_k:<34}{_Xw[_idx[_pick], _cols.index(_k)]:>12.4g}"
+              f"{_v:>+10.3f}{_run:>10.2f}")
+    print(f"  {f'(+ {len(_sv) - len(_top)} remaining features)':<34}{'':>12}"
+          f"{float(_sv.sum() - _top.sum()):>+10.3f}{_base + float(_sv.sum()):>10.2f}")
+    print()
+
+    # Additivity is the point: TreeSHAP decomposes the prediction EXACTLY, so the
+    # column above is the whole prediction, not a ranked summary of it. Checked
+    # against the model's own output rather than asserted.
+    _direct = float(_worked["mdl"].predict(_Xw[[_idx[_pick]]])[0])
+    _recon = _base + float(_sv.sum())
+    print(f"  additivity: base + sum(all SHAP) = {_recon:.4f}")
+    print(f"              model.predict()      = {_direct:.4f}")
+    print(f"              difference           = {abs(_recon - _direct):.2e}"
+          + ("   EXACT" if abs(_recon - _direct) < 1e-6 else "   MISMATCH"))
+    print()
+    print("  Read the running column: it starts at the mean training prediction and")
+    print("  each row moves it, ending at the model's actual output. Nothing is")
+    print("  discarded -- the remaining features are folded in as one line.")
 '''
 
 

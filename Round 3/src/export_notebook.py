@@ -172,10 +172,8 @@ import catboost as cb
 
 SEED = 42
 N_FOLDS = 10
-NN_SEEDS = [42, 202, 777, 1337, 2024, 3407]   # 6 seeds. Seed averaging is the measured
-                                        # lever: their single seeds averaged 0.8800, the
-                                        # 5-seed mean 0.8935 (+0.0135).
-GNN_SEEDS = [42, 202, 777, 1337]        # 4 seeds; second most valuable model (-0.0048)
+NN_SEEDS = [42, 202, 777, 1337, 2024, 3407, 5150, 8888]   # the 0.9212 run's config
+GNN_SEEDS = [42, 202, 777, 1337, 2024]  # the 0.9212 run's config
 AUX_MAX = 300_000             # auxiliary-corpus sample for the applicability domain
 # Both are FIXED, not chosen from the hardware. Branching the seed count on
 # whether a GPU is present would make the pinned run irreproducible on a
@@ -975,7 +973,7 @@ set_archive(archive_df if ARCHIVE_OK else None)
 # molecule is already in the featurised train+test union, so nothing new is
 # featurised and no row can arrive without features.
 # --------------------------------------------------------------------------
-ADD_ARCHIVE_ROWS = True
+ADD_ARCHIVE_ROWS = False   # reverted: the 0.9212 run did NOT use archive training rows
 
 if ARCHIVE_OK and ADD_ARCHIVE_ROWS:
     _have = set(zip(train_df["canon"], train_df["target_type"]))

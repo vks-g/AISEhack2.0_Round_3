@@ -1,0 +1,454 @@
+ANRF AISEHack 2026 — FINALE PRESENTATION  |  CONTENT SHEET
+Team: Cross Linkers  |  Theme: Polymer Property Prediction (Round 3, IIT Madras)
+FINAL SUBMISSION: ppp-v3-g  |  Public LB 0.924  |  mean OOF R² 0.9234
+Progression: 0.883 -> 0.898 -> 0.916 -> 0.919 -> 0.924
+
+HOW TO USE THIS FILE
+  Every paragraph is tagged at its START with the slide and box it belongs in,
+  e.g. [S1-f1]. Drop the text into that box of the supplied template.
+  STYLE (matches the VibeCoders reference deck): bold the lead-in term of every
+  bullet; citations go INLINE in bold parentheses next to the claim they support;
+  Strengths panel in TEAL, Weaknesses panel in RED; keep the 01/02/03 and S1–S4
+  numbering circles exactly as the template has them.
+
+===============================================================================
+SLIDE 1 — TITLE + YOUR SALIENT CONTRIBUTIONS
+===============================================================================
+
+[S1-HEADER] Date: 3rd September 2026 | ANRF AISEHack 2026 | Finale presentation |
+Theme: Polymer Property Prediction (IIT Madras) | TEAM: Cross Linkers
+
+[S1-SUBTITLE] Round 3 moved the goal from accuracy alone to ROBUSTNESS +
+EXPLAINABILITY + POLYMER INVARIANCE. We treated all three as machine-checked
+deliverables that the notebook proves at runtime — not claims made on a slide.
+
+[S1-f1] Modelling strategy
+• **Physics-constrained multi-task ensemble** — 5 base models -> per-property
+  cross-fitted Ridge stack -> two-pass physics blend -> range clip -> measured
+  ground-truth override
+• **Periodic polymer graph network** — the two `*` points are the SAME bond to
+  the next repeat unit, so we bond their neighbours and the graph encodes an
+  infinite chain, not a dangling oligomer **(Gurnani, Kuenneth, Toland &
+  Ramprasad, Chem. Mater. 35, 1560, 2023)**
+• **An exact physical identity, not a fitted relation:** eps = n² + eps_ionic
+  **(Chen, Kim, Batra et al., npj Comput. Mater. 6, 61, 2020)**
+
+[S1-f2] Training
+• **9,851 rows × 3,037 features | 380 fitted models | 3 h 01 m on ONE Tesla T4**
+• **Multi-task by design** — one shared trunk feeds all 7 heads, so the two
+  abundant targets subsidise the five scarce ones (221–337 labels each, which
+  carry 5/7 of the score) **(Kuenneth et al., Patterns 2, 100238, 2021)**
+• **Every seed fixed and printed; no stage can abort the run** — the submission
+  is written before any reporting stage executes
+
+[S1-f3] Results + Actions
+• **Public LB 0.924** (unweighted mean R² across 7 targets); **mean OOF R²
+  0.9234** — a CV-to-LB gap of +0.0006, i.e. our validation number IS our score
+• **Invariance: Δ = 0.000e+00 exactly**, certified at three levels (string,
+  feature, prediction) — a guarantee by construction, not a tolerance
+• **Every prediction ships an out-of-domain flag** that measurably predicts
+  error (eps R² 0.914 in-domain vs 0.816 out)
+
+===============================================================================
+SLIDE 2 — MODELLING · STRATEGIES
+===============================================================================
+
+[S2-01] ARCHITECTURE STRATEGY
+**Multi-task core.** One shared trunk -> 7 property heads. Five of seven targets
+(egb 337, eps 229, nc 229, ei 222, eea 221 rows) carry 5/7 of the score, so the
+abundant targets (tg 5,781 / egc 2,832 after augmentation) subsidise the scarce
+ones. The metric is UNWEIGHTED, so a 221-row property counts exactly as much as
+a 5,781-row one — that single fact drove the whole architecture.
+**Read the graph, not a hash of it.** The GNN takes atoms as nodes and bonds as
+edges — 4 message-passing rounds, GRU update, mean+max readout, 1.07 M
+parameters **(message passing after Gilmer et al., ICML 2017)**. It is the ONLY
+member not built on the shared 3,037-column matrix, so its errors are
+structurally decorrelated. **Best single model at 0.8978 mean OOF.**
+**Periodic graph.** We drop the two `*` dummies, bond their neighbours and flag
+the wrap-around edge, so the network sees a chain with no ends.
+**Readout choice is an invariance decision, not a hyperparameter.** A SUM
+readout scales with repeat-unit count; a MEAN does not. We ship mean+max and
+never sum — measured on an untrained net, the two separate by four orders of
+magnitude under dimerisation (1.1e-04 vs 4.8e-01 median |Δ|).
+
+[S2-02] PHYSICS + DOMAIN KNOWLEDGE
+**Physics applied AFTER stacking, not as a feature.** A tree splits one axis at
+a time and cannot represent a sum of two columns, so ei = egc + eea is wasted as
+one feature among 3,037. As an explicit post-stack blend it is worth +0.0250 on
+ei and +0.0244 on eps.
+**Always fit the relation; never apply the raw identity.** Measured on
+co-observed molecules: eps ≈ nc² scores **0.336 raw but 0.855 affine-fitted**;
+nc ≈ sqrt(eps) **0.171 raw, 0.837 fitted**. Both shipped baselines we inherited
+applied the raw form.
+**Ionic decomposition — the turning point.** Maxwell's n² = eps holds at OPTICAL
+frequency, but the dataset tabulates the STATIC constant, which is why the raw
+relation collapses to 0.336. A DFPT calculation accounts for exactly
+eps_electronic + eps_ionic and nothing else **(Chen, Kim, Batra et al., 2020)**,
+and those two parts are stored as SEPARATE FIELDS in the dataset of record
+**(Huan, Mannodi-Kanakkithodi, Kim, Sharma, Pilania & Ramprasad, Sci. Data 3,
+160012, 2016)**. Since eps_elec IS n², the shortfall is exactly the ionic term:
+    **eps − nc² = eps_ionic   (an identity, not a regression)**
+Two independent checks that this is real rather than convenient: it is
+**non-negative on 134/134 co-observed molecules (mean +0.767, min +0.024)** — a
+generic empirical residual would cross zero, an ionic contribution cannot; and
+our own blind affine fit had already converged on a = 1.040, b = 0.615, i.e. a
+slope of 1 and an intercept equal to the mean ionic term. **It was rediscovering
+the decomposition without knowing it.**
+**RESULT: eps 0.8514 -> 0.8758, nc 0.9164 -> 0.9331 on the full OOF.**
+
+[S2-03] DATA STRATEGY
+**Canonicalisation at ingest.** 10,605 raw SMILES are only 8,990 distinct
+molecules. Canonicalising first makes every downstream stage a deterministic
+function of the MOLECULE, which is what turns invariance from a hope into a
+guarantee.
+**Intensive twins — invariance as feature design.** Every extensive RDKit
+descriptor gets a per-heavy-atom twin, because an extensive quantity DOUBLES
+when a repeat unit is written as its dimer and an intensive one does not.
+**This family is the single largest driver of tg at 25.4% of total |SHAP|** —
+the invariance choice is also the biggest accuracy lever on the biggest target.
+**Co-observed partner features.** 88–99% of DFT-block test rows have their
+polymer measured under some OTHER property, so a partner label is legitimately
+available at inference. Conceptual ancestor: multi-fidelity information fusion
+**(Venkatram, Batra et al., J. Phys. Chem. B, 2020)**.
+**Chain-extension augmentation.** A and AA are the same polymer with the same
+labels, so the dimer is free training data; applied to the five scarce targets
+only. Independently corroborated as a top-solution strategy **(Liu et al.,
+Open Polymer Challenge post-competition report, arXiv:2512.08896, 2025)**.
+**Host-sanctioned Round-2 archive, used three ways.** The official baseline
+notebook itself downloads it; the hosts confirmed it is in scope. It supplies
+(a) extra partner labels — true_egc test coverage 15.3% -> 38.1%, (b) **+33%
+training rows (7,405 -> 9,851; tg and egc each +40%)** which feed the shared
+trunk the five scarce targets ride on, and (c) a measured-value override on the
+2,450 test rows it labels, applied after clipping so a measurement is never
+perturbed.
+
+[S2-ARCHITECTURE-DIAGRAM] Insert pipeline diagram. Annotate the boxes with:
+LightGBM/XGBoost/CatBoost 70 models each · multi-task NN 6 seeds × 10 folds ·
+periodic GNN 1.07 M params, 4 seeds × 10 folds · 3,037 input columns ·
+per-property Ridge stack · two-pass physics · archive override.
+
+[S2-STRENGTHS]  (teal panel)
+• **Every design choice backed by a measurement**, logged with its noise floor
+• **Invariance is an EXACT guarantee (Δ = 0)**, not a statistical observation
+• **No early stopping anywhere** — our OOF is honest, and it transferred: OOF
+  0.9234 -> LB 0.924
+• **Ships a calibrated applicability-domain flag** with every prediction
+• **Degrades safely** — the submission is written before any reporting stage, and
+  no later stage can abort the run
+• **Exact TreeSHAP with no external dependency**, so no install can fail at runtime
+
+[S2-WEAKNESSES]  (red panel)
+• **Five of seven targets are scored on ~150 test rows** -> LB noise band ≈ ±0.007
+• **TRANSLATIONAL invariance (same chain, different cut point) is NOT guaranteed**
+  — measured, diagnosed, not yet fixed (Slide 5)
+• **eps remains the weakest target (0.8758)**; ei second (0.8978)
+• **The archive-as-training-rows gain was never A/B-measured** — adopted on a
+  mechanism argument and validated only by the leaderboard
+• **3 h training**; not an interactive-latency system
+
+===============================================================================
+SLIDE 3 — KEY RESULTS: WHY, WHAT AND HOW  (S1–S4)
+===============================================================================
+
+[S3-S1] WHAT IS WORKING
+**Architecture.** LightGBM + XGBoost + CatBoost + multi-task NN (6 seeds ×
+10 folds) + periodic multi-task GNN (4 seeds × 110 epochs × 10 folds).
+**Stacking, precisely.** Each model first averages its OWN fold replicas into
+one vector. Those 5 vectors then enter ONE per-property Ridge as 5 columns, with
+alpha chosen by inner CV per target. **There is no plain averaging across models
+anywhere**, and the combiner is cross-fitted so the weights never see the rows
+they are scored on.
+**Features.** 3,037 columns — Morgan r2 (1,024) and r3 (512), atom pair (512),
+topological torsion (512), 217 RDKit descriptors, 167 MACCS keys, 37 SMARTS
+functional groups, 20 element counts and fractions, 16 polymer-specific terms
+(backbone length between the two `*`, backbone aromatic/hetero ratio, sidechain
+ratio, branch count), **14 intensive twins**, 6 Gasteiger charge statistics.
+**Hyperparameters that measurably mattered** — size-adaptive model capacity
+(one parameter set sized for tg over-fits a 220-row target); GNN at 110 epochs
+and 4 seeds; per-property fold counts.
+
+[S3-S2] HOW IS IT WORKING (quantitative)
+Out-of-fold R², final run:
+
+  target    lgbm     xgb      cb      mtnn     gnn     STACK   +PHYSICS
+  tg       0.9176  0.9166  0.9092  0.9025  0.9162   0.9274   0.9274
+  egc      0.9185  0.9197  0.9157  0.8849  0.8999   0.9307   0.9307
+  egb      0.9310  0.9337  0.9270  0.9324  0.9387   0.9551   0.9551
+  eps      0.8247  0.8266  0.8369  0.8049  0.8200   0.8514   0.8758
+  nc       0.8766  0.8775  0.8798  0.8942  0.9055   0.9164   0.9331
+  ei       0.8367  0.8250  0.8353  0.8532  0.8777   0.8725   0.8978
+  eea      0.8758  0.8775  0.8922  0.8940  0.9264   0.9367   0.9438
+  MEAN     0.8830  0.8824  0.8852  0.8809  0.8978   0.9129   0.9234
+
+**The stack beats its best member by +0.0151** — that is what decorrelation buys.
+**Physics adds a further +0.0105**, concentrated exactly where predicted:
+ei +0.0250, eps +0.0244, nc +0.0168, eea +0.0070.
+**Public LB 0.924 against OOF 0.9234 — a gap of +0.0006.**
+
+[S3-S3] WHY IS IT WORKING
+**1. The physics is real, and we report it honestly.** Measured on co-observed
+molecules with ZERO fitting: ei ≈ egc + eea direct R² 0.963; eea ≈ ei − egc
+0.971; egb ≈ egc 0.892 -> 0.928 calibrated; eps ≈ nc² **0.336 -> 0.855**;
+nc ≈ sqrt(eps) **0.171 -> 0.837**. The first three are genuinely direct. The
+last two are NOT, and we print both columns rather than quote 0.855 as "direct"
+— the gap is precisely what the ionic decomposition explains and repairs.
+**2. Decorrelation, not capacity.** The GNN is our best single model (0.8978)
+AND the most complementary: worse than the boosters on egc, far better on eea
+(0.9264 vs 0.8758) and ei (0.8777 vs 0.8367). Adding it took the stack from
+0.8713 (three boosters) to 0.9129.
+**3. Honest validation is a feature, not an overhead.** We use no early stopping
+anywhere. A model that picks its iteration count by watching the rows it is then
+scored on reports a number it cannot reproduce on the leaderboard. Ours
+transferred to within 0.0006.
+**4. Only NEW INFORMATION ever paid.** Across the whole project every purely
+derived feature failed. What worked: partner labels (a different target,
+legitimately available at inference), a new model class, more data, truer
+structure, and an exact physical identity.
+
+[S3-S4] PARAMETERS, TIME, AND THE PHASE 1 -> PHASE 2 SHIFT
+**Periodic GNN** 1.07 M params (hidden 160, 4 layers, GRU update) × 40 models.
+**Multi-task NN** trunk 1024-512-256-128 with per-target heads × 60 models.
+**LightGBM / XGBoost / CatBoost** 70 models each. **Leak-free partner universe**
+a further 70. **TOTAL 380 fitted models.**
+**Training 3 h 01 m (10,895 s) on ONE Tesla T4 (Kaggle).** Featurisation of
+12,345 molecules: 119 s. Inference is a few seconds for all 4,940 test rows.
+**PARADIGM SHIFT.** Phase 1 was a fingerprint -> tree ensemble optimising
+accuracy alone. Phase 2 changed five things: (a) added a model that reads the
+GRAPH rather than a hash of it; (b) moved physics out of the feature matrix into
+an explicit post-stack stage and fitted every relation instead of asserting it;
+(c) made invariance an EXACT guarantee enforced at ingest, and made feature
+design serve it (intensive twins, mean+max readout); (d) began shipping a
+trustworthiness flag with every prediction; (e) removed early stopping so that
+the number we validate on is the number we score.
+
+===============================================================================
+SLIDE 4 — KEY RESULTS: THE THREE ROUND-3 THEMES   *** OUR DIFFERENTIATOR ***
+===============================================================================
+
+[S4-01] POLYMER INVARIANCE: an exact guarantee, not a statistical one
+Canonicalising at ingest makes every downstream stage — descriptors,
+fingerprints, partner lookup, graph construction — a deterministic function of
+the MOLECULE, and canonical(rewrite(s)) == canonical(s) for any valid rewriting.
+**Certified at three levels, all PASS:**
+  L1 string       2,000 rewritings × 400 molecules      0 mismatches
+  L2 features     3,037 cols × 150 molecules            max |Δ| = 0.000e+00
+  L3 predictions  end-to-end on the fitted pipeline     max |Δ| = 0.000e+00
+**The readout ablation is the part judges should look at.** On an untrained net,
+so it is a property of the ARCHITECTURE and not of any particular fit:
+  readout              rewriting              median |Δ|    max |Δ|
+  mean+max (shipped)   permutational          0.00e+00      0.00e+00
+  mean+max (shipped)   repetition (dimer)     1.11e-04      1.06e-03
+  sum (conventional)   repetition (dimer)     4.79e-01      2.49e+00
+**Four orders of magnitude**, and it is why we never use a sum readout.
+**Stated honestly:** repeat-unit invariance is MEASURED NEAR-invariance, not a
+proof; translational invariance is NOT guaranteed. The exact guarantee is
+permutational. We report all three separately rather than quoting one number.
+
+[S4-02] EXPLAINABILITY: exact TreeSHAP, and it recovers known physics
+Computed inside LightGBM via `pred_contrib=True` — the same algorithm the `shap`
+package implements **(Lundberg & Lee, NeurIPS 2017; Lundberg et al., Nature
+Machine Intelligence 2, 56, 2020)** — with no external dependency that can fail
+at runtime.
+**THERMAL (tg).** Intensive twins carry 25.4% of attribution and
+`rd_RingCount` / `po_backbone_rings` lead: chain stiffness dominates, exactly as
+free-volume theory predicts.
+**ELECTRONIC (egc/egb).** `rd_FractionCSP3` is the top egc feature — an sp³-rich
+backbone localises electrons and WIDENS the gap; conjugation delocalises pi
+density and NARROWS it. For egb the fitted partner combination is 26.0% and
+`true_egc` 10.3%: **the relation egb ≈ egc appears directly in the attribution
+rather than being asserted by us.**
+**OPTICAL (nc/eps).** Molar-refractivity surface descriptors (`rd_SMR_VSA10`)
+appear for both — the model recovers refractive index as electronic
+polarisability from structure alone, without being told **(Lightstone, Chen,
+Kim, Batra & Ramprasad, J. Appl. Phys. 127, 215105, 2020)**.
+**One worked molecule, end to end.** For `*c1ccc(-c2nc3cc(-c4ccc5oc(*)nc5c4)ccc3o2)cc1`
+(measured tg 430.0 K, predicted 426.9 K): base value 143.5, then
+`iv_NumRotatableBonds` = 0.083 contributes **+102.5**, valence electrons +35.8,
+ring count +27.3. A fully aromatic fused-ring backbone with almost no rotatable
+bonds has a very high glass transition — **the model found it unaided.**
+Additivity checked against the model's own output: **difference 3.98e-13.**
+
+[S4-03] ROBUSTNESS: a calibrated applicability domain
+Novelty from **UNFOLDED** Morgan substructure hashes — folded 2,048-bit
+fingerprints are degenerate here, because every bit is occupied by a 5.97 M
+corpus and novelty collapses to a constant. A molecule is out-of-domain when it
+contains a substructure absent from the entire corpus. **11,628 distinct
+substructures; the corpus covers 8,887; 22.2% of molecules are out-of-domain.**
+That flag predicts error:
+  target   n in   R² in   n out   R² out    MAE in   MAE out
+  tg       4688   0.938    1093   0.884     17.77     25.31
+  egc      2174   0.941     658   0.900      0.248     0.371
+  eps       144   0.914      85   0.816      0.197     0.298
+  ei        138   0.918      84   0.861      0.191     0.268
+**HONEST NEGATIVE RESULT:** we tested the auxiliary corpus as a MODEL INPUT and
+it was worth +0.0012 — noise. A TF-IDF/SVD embedding of it is a linear
+re-expression of the Morgan fingerprint the trees already see in full. **We
+repurposed the corpus as a trust signal rather than dropping it.**
+
+[S4-PLOTS] Put the per-target OOF table (S2) and the in/out-of-domain table side
+by side; add the 5-relation raw-vs-fitted physics table and the readout ablation.
+
+[S4-STRENGTHS]  All three Round-3 themes are machine-checked at runtime, not
+asserted. Explainability recovers physics we never encoded.
+[S4-WEAKNESSES] Translational invariance not yet guaranteed; eps still weakest;
+the out-of-domain flag is descriptive, not yet used to recalibrate.
+
+===============================================================================
+SLIDE 5 — DETAILS OF RELEVANT EXPERIMENTATION AND METHODOLOGY
+===============================================================================
+
+[S5-01] ABLATIONS AND WHAT THEY CHANGED
+**Dropping the SMILES CNN was the right call — but not for the reason it looks.**
+Measured honestly, the CNN contributed **+0.0005 to our stack** and **+0.0000**
+on a sibling pipeline's leave-one-out over saved OOF vectors. It was also the
+single most expensive stage in any run that carried it: **5,779 s — 1 h 36 m,
+29% of a 5.5 h run — for the WORST model of six (0.8663 mean OOF, 0.7693 on
+eps, our weakest target).** We are precise about the claim: **removing it did not
+raise the score; it bought 1 h 36 m at no cost, and we REINVESTED that compute
+in the two models that were measurably carrying the stack** — GNN 80 -> 110
+epochs and 3 -> 4 seeds, NN 3 -> 6 seeds. The score came from the reinvestment.
+Adding a weak column to a Ridge fitted on ~220 rows is not free either: kNN
+measured **−0.0006** and kNN+Ridge **−0.0003** in our own logs.
+**Measured and REJECTED** (recorded so no one retries them): a fourth booster
++0.0001; iterated physics refinement over the relation graph looked worth
+**+0.042 and was entirely fake** — eps refined from nc and nc then predicted
+from the refined eps, closing a two-hop loop back to the row's own label; with a
+per-fold mask the real gain is +0.001, so it ships disabled. Doubling every
+fingerprint width made LightGBM **more than 7× slower** for no measured gain.
+**The leak hunt is the experiment we are proudest of.** We found four separate
+leaks of the same class — a value that is itself a model output used as an
+input, closing a cycle to the row's own label. One inflated OOF by +0.069 on
+eps. Section 5 of the notebook **proves the leak exists first, then proves each
+guard removes it** — a guard that passes without a demonstrable leak proves
+nothing.
+
+[S5-02] EXTERNAL RESOURCES THAT BACK THE "WHY"
+**[1] Chen, Kim, BATRA, Lightstone et al. & Ramprasad, npj Comput. Mater. 6, 61
+(2020)** — frequency-dependent dielectric constant. **SOURCE OF OUR IONIC
+DECOMPOSITION:** states a DFPT calculation can only account for the eps_elec and
+eps_ionic parts, which is what licenses eps − nc² = eps_ionic as an IDENTITY
+rather than a fit.
+**[2] Huan, Mannodi-Kanakkithodi, Kim, Sharma, Pilania & Ramprasad, Sci. Data 3,
+160012 (2016)** — the dataset of record; stores eps_electronic and eps_ionic as
+SEPARATE FIELDS, confirming the decomposition is present in the data itself.
+**[3] Gurnani, Kuenneth, Toland & Ramprasad, Chem. Mater. 35, 1560 (2023)** —
+polyGNN. **SOURCE OF OUR PERIODIC GRAPH:** treat the repeat unit as periodic by
+bonding the two attachment neighbours, so the network sees a chain rather than a
+molecule with two dangling stubs.
+**[4] Kuenneth, Rajan, Tran, Chen, Kim & Ramprasad, Patterns 2, 100238 (2021)** —
+polymer informatics with multi-task learning. **SOURCE OF OUR SHARED-TRUNK
+DESIGN**, and the origin of this dataset's property set.
+**[5] Lightstone, Chen, Kim, BATRA & Ramprasad, J. Appl. Phys. 127, 215105
+(2020)** — refractive index prediction; our nc target. Their framing of n as
+electronic polarisability is what our molar-refractivity attributions reproduce
+from a completely independent direction.
+**[6] Gilmer, Schoenholz, Riley, Vinyals & Dahl, ICML (2017)** — neural message
+passing; the message-passing/GRU-update formulation our GNN uses.
+**[7] Lundberg & Lee, NeurIPS (2017)** and **Lundberg et al., Nat. Mach. Intell.
+2, 56 (2020)** — SHAP and TreeSHAP; the exact-attribution method we run inside
+LightGBM with no external dependency.
+**[8] Venkatram, BATRA et al., J. Phys. Chem. B (2020)** — multi-fidelity
+information fusion; the conceptual ancestor of our co-observed partner features.
+**[9] Liu et al., arXiv:2512.08896 (2025)** — NeurIPS Open Polymer Challenge
+post-competition report; independently corroborates chain extension and
+hierarchical physics as top-solution strategies.
+**[10] Tran, Kim, Chen, Chandrasekaran, BATRA et al., J. Appl. Phys. 128, 171104
+(2020)** — Polymer Genome; our external benchmark.
+
+[S5-03] METHODOLOGY / LLM-ASSISTED WORKFLOW
+**LLM used as an EXPERIMENTAL INSTRUMENT, not a code generator.** The loop was:
+form a hypothesis -> score it with the project's own CV harness -> keep only what
+beat the FULL pipeline, never a weaker baseline.
+**Disciplines that mattered most:**
+• **One implementation, two entry points.** CV, inference, the invariance audit
+  and the explainability report all derive from the same `fit`/`predict` pair, so
+  what CV measured is literally what gets submitted.
+• **A printed noise floor on every run**, and a standing rule that a delta under
+  2× it is not an improvement — this killed several changes that looked positive.
+• **A static name-resolution gate on the exported notebook.** Inlining every
+  module into one namespace drops intra-package imports, so a surviving
+  `trees.make(...)` parses fine and raises only when it executes. That exact bug
+  sat in an exported notebook and would have crashed on Kaggle **542 s into a
+  run**; a 1-second `symtable` check now blocks the export.
+• **Nothing after `submission.csv` may abort the run.** We learned this the
+  expensive way: a compliance check compared attached-dataset paths for equality
+  with DATA_DIR, flagged the legitimate parent directory, and marked a COMPLETED
+  2 h 53 m run as failed — the submission was already written and correct. Every
+  post-submission check now prints loudly and never raises.
+**Three corrections we made to our own reasoning** (kept because they were
+instructive): we predicted the archive could not move CV — it moved +0.0149 and
+we had to explain why; we assumed a config value (15 folds) instead of running
+the code that returns it (10), and over-estimated GNN runtime by 50% for several
+decisions; and we quoted a leaky +0.069 before tracing its provenance.
+
+[S5-KNOWN-LIMITATION] "SMILES invariance" is three separate claims and only one
+is exact:
+• **Re-representation (atom ordering)** — EXACT, Δ = 0, certified end to end.
+• **Repetition (A vs AA)** — APPROXIMATE. ~97% of polymers give structurally
+  identical node environments under dimerisation; the residual is genuine, not
+  numerical. Trained in via chain extension and served by the intensive twins.
+• **Translational (same chain, different cut point)** — NOT guaranteed.
+  Diagnosis: the wrap-around edge is forced to a generic single bond and carries
+  a positional flag, both cut-point dependent by definition. The fix is contained
+  and identified; it is the first thing we would do with more budget.
+
+===============================================================================
+SLIDE 6 — REFERENCES + CLOSING
+===============================================================================
+
+[S6-REFERENCES]
+[1] L. Chen, C. Kim, R. Batra, J. P. Lightstone, C. Wu, Z. Li, A. A. Deshmukh,
+    Y. Wang, H. D. Tran, P. Vashishta, G. A. Sotzing, Y. Cao & R. Ramprasad.
+    "Frequency-dependent dielectric constant prediction of polymers using
+    machine learning." npj Computational Materials 6, 61 (2020).
+[2] T. D. Huan, A. Mannodi-Kanakkithodi, C. Kim, V. Sharma, G. Pilania &
+    R. Ramprasad. "A polymer dataset for accelerated property prediction and
+    design." Scientific Data 3, 160012 (2016).
+[3] R. Gurnani, C. Kuenneth, A. Toland & R. Ramprasad. "Polymer informatics at
+    scale with multitask graph neural networks." Chemistry of Materials 35,
+    1560 (2023).
+[4] C. Kuenneth, A. C. Rajan, H. Tran, L. Chen, C. Kim & R. Ramprasad. "Polymer
+    informatics with multi-task learning." Patterns 2, 100238 (2021).
+[5] J. P. Lightstone, L. Chen, C. Kim, R. Batra & R. Ramprasad. "Refractive
+    index prediction models for polymers using machine learning." J. Appl.
+    Phys. 127, 215105 (2020).
+[6] J. Gilmer, S. S. Schoenholz, P. F. Riley, O. Vinyals & G. E. Dahl. "Neural
+    message passing for quantum chemistry." ICML (2017).
+[7] S. M. Lundberg & S.-I. Lee. "A unified approach to interpreting model
+    predictions." NeurIPS (2017); S. M. Lundberg et al. "From local
+    explanations to global understanding with explainable AI for trees."
+    Nature Machine Intelligence 2, 56 (2020).
+[8] S. Venkatram, R. Batra, L. Chen, C. Kim, M. Shelton & R. Ramprasad.
+    "Predicting crystallization tendency of polymers using multi-fidelity
+    information fusion and machine learning." J. Phys. Chem. B (2020).
+[9] G. Liu et al. "Open Polymer Challenge: Post-Competition Report."
+    arXiv:2512.08896 (2025).
+[10] H. D. Tran, C. Kim, L. Chen, A. Chandrasekaran, R. Batra et al.
+    "Machine-learning predictions of polymer properties with Polymer Genome."
+    J. Appl. Phys. 128, 171104 (2020).
+
+[S6-CLOSING]
+**Public LB 0.924 | mean OOF R² 0.9234 | 380 models | 3 h 01 m on one Tesla T4**
+Validation gap +0.0006 — no early stopping anywhere, so the number we measure is
+the number we score. Invariance Δ = 0 exactly, certified at three levels.
+TreeSHAP per property, with one molecule explained end to end and additivity
+verified to 4e-13. 22.2% of molecules carry an explicit out-of-domain caveat.
+**A single reproducible Kaggle notebook: all seeds fixed, no wall-clock
+branching, no artifact imported that the run did not itself create.**
+
+===============================================================================
+APPENDIX — NUMBERS YOU MAY BE ASKED FOR (keep off-slide, have ready)
+===============================================================================
+Rows 9,851 (7,405 + 2,446 archive) · Features 3,037 · Test rows 4,940
+Archive override 2,450/4,940 = 49.6% (tg 1,646/2,763, egc 804/1,352)
+Override MAE at the moment of replacement: tg 7.42 K, egc 0.093 eV
+Stack -> physics gains: ei +0.0250, eps +0.0244, nc +0.0168, eea +0.0070,
+  egb −0.0012 (blend weight correctly shrank to near zero)
+Partner regression: +0.0001 overall — we report it as the null result it is
+Ionic term: mean +0.767, min +0.024, positive on 134/134 co-observed molecules
+Physics raw vs fitted: ei .963/.965 · eea .971/.973 · egb .892/.928 ·
+  eps .336/.855 · nc .171/.837
+Featurisation 119 s for 12,345 molecules · GNN 5,579 s · CatBoost 2,450 s
+Fold scheme: per-property KFold(10). Measured justification — polymer-grouped
+  folds give validation rows 0% partner availability, per-property folds ~96%,
+  and the ACTUAL test set 88–99%. Grouped CV measures a different problem.

@@ -1034,12 +1034,20 @@ for _t in TARGETS:
 _arch_root = ""
 if ARCHIVE_OK and str(ARCHIVE_SRC).startswith("/kaggle/input"):
     _arch_root = "/".join(str(ARCHIVE_SRC).split("/")[:4])   # /kaggle/input/<dataset>
+# A path is fine if it IS the data dir, CONTAINS it (the competition mounts at
+# /kaggle/input/competitions/<slug>, so the glob returns the parent), or is the
+# archive dataset. Comparing for equality alone flagged the parent directory and
+# aborted a completed run -- the submission was already written, so this check
+# is a WARNING now: nothing after submission.csv may kill the notebook.
+_ok_roots = [os.path.abspath(DATA_DIR)]
+if _arch_root:
+    _ok_roots.append(os.path.abspath(_arch_root))
 _others = [p for p in _glob.glob("/kaggle/input/*")
-           if os.path.abspath(p) != os.path.abspath(DATA_DIR)
-           and os.path.abspath(p) != os.path.abspath(_arch_root or "/__no_such_input__")]
+           if not any(r == os.path.abspath(p) or r.startswith(os.path.abspath(p) + os.sep)
+                      for r in _ok_roots)]
 if _others:
-    _fail.append(f"unexpected datasets attached: {_others} -- only the competition data "
-                 f"and the host-sanctioned Round-2 archive may be inputs")
+    _warn.append(f"unexpected paths under /kaggle/input: {_others} -- expected only the "
+                 f"competition data and the host-sanctioned Round-2 archive")
 
 # Prove no label outside train.csv + the archive ever entered the partner table.
 _pool_keys = set(zip(train_df["canon"], train_df["target_type"]))
@@ -1066,8 +1074,21 @@ for _w in _warn:
     print("WARN ", _w)
 for _f in _fail:
     print("FAIL ", _f)
-assert not _fail, f"compliance audit failed: {_fail}"
-print("\\nPASS: submission.csv is well formed and the run is rule-compliant.")
+# The submission was written in section 11, long before this cell. A failing
+# check here must therefore be LOUD but never fatal: raising marks the whole
+# Kaggle run failed and throws away a completed, valid submission. That is
+# exactly what happened once -- a mis-specified /kaggle/input check aborted a
+# 2.8-hour run whose submission.csv was already on disk and correct.
+if _fail:
+    print()
+    print("!" * 70)
+    print("COMPLIANCE AUDIT REPORTED PROBLEMS -- submission.csv was still written")
+    print("and is listed above. Review each line before submitting:")
+    for _f in _fail:
+        print("   FAIL ", _f)
+    print("!" * 70)
+else:
+    print("\\nPASS: submission.csv is well formed and the run is rule-compliant.")
 '''
 
 
